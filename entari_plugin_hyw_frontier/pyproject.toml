@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "entari-plugin-hyw-frontier"
+version = "0.1.0"
+description = "Entari messaging adapter for the Python Hyw-Frontier library"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "arclet-entari>=0.18.6,<0.19",
+    "hyw-frontier==0.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+exclude = ["/pyproject.toml", "/PKG-INFO", "/.gitignore", "/__pycache__", "/dist"]
+
+[tool.hatch.build.targets.wheel.sources]
+"." = "entari_plugin_hyw_frontier"
+
+[tool.hatch.build.targets.sdist]
+include = ["/*.py", "/pyproject.toml", "/README.md"]

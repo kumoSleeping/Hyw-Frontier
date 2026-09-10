@@ -1,0 +1,111 @@
+[
+  {
+    "name": "fill_thinking",
+    "label": "填充思考",
+    "description": "填充思考：填写本轮作答准备的简短摘要和行动计划，不展开逐步推理；无相关信息填“无”",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "用户需求": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "用户想知道什么、预期结果；区分明确要求与可能意图"},
+        "关键关系": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "影响答案的复杂关联、依赖、因果、时序或取舍"},
+        "上下文注意点": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "上一轮回复或用户消息中值得核实的事实、歧义、纠正、约束和未完成事项"},
+        "信息主要注意点": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "已收集信息中直接影响当前答案的重点"},
+        "信息潜在注意点": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "可能改变结论、尚待核实的事项，不将猜测当事实"},
+        "图片注意点": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "图片中相关文字、主体、位置关系、异常或与对话不一致之处；看不清注明不确定，无图片填“无图片”"},
+        "接下来任务拆解": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "完成当前请求接下来的简短行动，用分号分隔"},
+        "幽默注意点": {"type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S", "description": "值得关注的幽默、梗或讽刺，以及回应边界；不适合时填“不使用幽默”"}
+      },
+      "required": ["用户需求", "关键关系", "上下文注意点", "信息主要注意点", "信息潜在注意点", "图片注意点", "接下来任务拆解", "幽默注意点"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "crop_user_image",
+    "label": "裁剪用户图片",
+    "description": "按原图像素坐标裁剪用户图片，返回裁剪图",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 100, "description": "user_image_original 标记中的原图编号"},
+        "bbox": {
+          "type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 4, "maxItems": 4,
+          "description": "原图像素坐标 [left, top, right, bottom]，右下边界不包含"
+        }
+      },
+      "required": ["source_id", "bbox"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "web_search",
+    "description": "并行搜索网页，返回标题、链接和摘要",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "searches": {
+          "type": "array", "minItems": 1, "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "搜索词或短句"},
+              "location": {
+                "type": "string",
+                "enum": ["ar", "au", "at", "be", "br", "ca", "cl", "cn", "dk", "fi", "fr", "de", "gr", "hk", "in", "id", "it", "jp", "my", "mx", "nl", "nz", "no", "ph", "pl", "pt", "ru", "sa", "za", "kr", "es", "se", "ch", "tw", "tr", "gb", "us"],
+                "description": "搜索地区代码"
+              },
+              "after_date": {
+                "search_providers": ["jina", "parallel"],
+                "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "description": "发布日期下限 YYYY-MM-DD，包含当天；省略不限制"
+              },
+              "timelimit": {
+                "search_providers": ["ddgs"],
+                "type": "string", "enum": ["d", "w", "m", "y"],
+                "description": "近期范围：d一天、w一周、m一个月、y一年；省略不限制"
+              }
+            },
+            "required": ["query"], "additionalProperties": false
+          }
+        }
+      },
+      "required": ["searches"], "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_images",
+    "search_providers": ["jina", "parallel", "ddgs"],
+    "description": "搜索图片，返回图片链接和来源页面",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S", "description": "图片搜索词"}
+      },
+      "required": ["query"], "additionalProperties": false
+    }
+  },
+  {
+    "name": "send_process_intro",
+    "description": "向用户发送简短的过程介绍",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string", "minLength": 1, "maxLength": 600, "pattern": "\\S",
+          "description": "过程介绍文本"
+        }
+      },
+      "required": ["text"], "additionalProperties": false
+    }
+  },
+  {
+    "name": "jina_read_url",
+    "description": "读取网页或 PDF，返回正文和来源链接",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {"type": "string", "minLength": 8, "maxLength": 2000, "description": "网页或 PDF 地址"}
+      },
+      "required": ["url"], "additionalProperties": false
+    }
+  }
+]

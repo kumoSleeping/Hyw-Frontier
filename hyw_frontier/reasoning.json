@@ -1,0 +1,6 @@
+{
+  "provider": "deepseek",
+  "models": ["deepseek-v4.1-flash-expires-on-0910"],
+  "levels": ["off", "low", "high", "max"],
+  "default": "low"
+}

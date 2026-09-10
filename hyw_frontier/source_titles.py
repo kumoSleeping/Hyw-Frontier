@@ -1,0 +1,58 @@
+"""Offline source labels from tool evidence, never assistant-authored link text."""
+import json
+from urllib.parse import unquote, urlsplit
+
+from .media import discover
+
+
+def source_key(url: str) -> str:
+    try:
+        return unquote(urlsplit(url)._replace(fragment="").geturl())
+    except ValueError:
+        return url
+
+
+def source_titles(messages: list[dict]) -> dict[str, str]:
+    titles: dict[str, str] = {}
+    image_pages: dict[str, str] = {}
+    for message in messages:
+        name = message.get("toolName")
+        if (message.get("role") != "toolResult" or message.get("isError")
+                or name not in {"web_search", "search_images", "jina_read_url"}):
+            continue
+        content = message.get("content", [])
+        if not content or content[0].get("type") != "text":
+            continue
+        try:
+            data = json.loads(content[0]["text"])
+        except (ValueError, KeyError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for batch in data.get("results", []):
+            if not batch.get("ok"):
+                continue
+            rows = batch.get("results", []) if name in {"web_search", "search_images"} else [batch]
+            for row in rows:
+                url = row.get("url", "")
+                if not url:
+                    continue
+                title = " ".join(row.get("title", "").split())
+                if not title or title in {url, row.get("source_url")}:
+                    title = urlsplit(url).hostname or url
+                for address in (url, row.get("source_url", "")):
+                    if address:
+                        key = source_key(address)
+                        if name == "jina_read_url" or key not in titles:
+                            titles[key] = title
+                if row.get("image_url"):
+                    image_pages[source_key(row["image_url"])] = source_key(url)
+                text = row.get("snippet", row.get("content", ""))
+                for image in discover(text, url, title, 0):
+                    image_pages.setdefault(source_key(image.url), source_key(url))
+        for image in data.get("media_images", []):
+            if image.get("url") and image.get("source_url"):
+                image_pages[source_key(image["url"])] = source_key(image["source_url"])
+    for image, page in image_pages.items():
+        titles[image] = titles.get(page) or urlsplit(page).hostname or page
+    return titles
