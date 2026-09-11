@@ -34,11 +34,9 @@ class Config(BasicConfModel):
     timeout: float = 300
     send_timeout: float = 30
     max_concurrent: int = 2
-    max_sessions: int = 64
-    session_ttl: float = 3600
-    max_turns: int = 20
-    max_history_bytes: int = 8 * 1024 * 1024
-    max_total_history_bytes: int = 64 * 1024 * 1024
+    source_ttl: float = 3600
+    max_source_records: int = 1280
+    max_source_bytes: int = 64 * 1024 * 1024
     max_question_chars: int = 12000
     quote: bool = False
     log_enabled: bool = True
@@ -57,12 +55,12 @@ class Config(BasicConfModel):
             raise ValueError("Frontier commands must be distinct slash commands without whitespace")
         if {self.command, self.stop_command, self.help_command} & {'/link', '/qlink'}:
             raise ValueError('/link and /qlink are reserved source-link aliases')
-        for name in ("request_timeout", "timeout", "send_timeout", "session_ttl"):
+        for name in ("request_timeout", "timeout", "send_timeout", "source_ttl"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        for name in ("max_rounds", "max_concurrent", "max_sessions", "max_turns", "max_history_bytes",
-                     "max_total_history_bytes", "max_question_chars", "log_retention_days",
+        for name in ("max_rounds", "max_concurrent", "max_source_records", "max_source_bytes",
+                     "max_question_chars", "log_retention_days",
                      "log_max_files", "log_max_bytes", "log_total_bytes"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be positive")

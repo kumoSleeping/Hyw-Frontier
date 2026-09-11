@@ -24,7 +24,7 @@ from .service import FrontierService
 __version__ = "0.1.0"
 __plugin__ = metadata(
     "hyw-frontier", author=[{"name": "kumo"}], version=__version__, config=Config,
-    description="Python-native search answers with compressed image delivery and isolated conversations",
+    description="Python-native concurrent search answers with compressed image delivery",
 )
 conf = plugin_config(Config)
 service = FrontierService(conf)
@@ -86,17 +86,13 @@ async def ask(session: Session[MessageCreatedEvent], result: Arparma):
         # replied-to image inside that quote, so read it back from the event itself.
         chain = MessageChain([*chain, *quoted_images(session)])
     question = chain.extract_plain_text().strip()
-    sticky = False
-    words = question.split(maxsplit=1)
-    if words and words[0] in ("-s", "--session"):
-        sticky, question = True, words[1] if len(words) > 1 else ""
     if question.lower() in ("reset", "clear", "重置", "清空"):
         await service.reset(session, key)
         return
     quoted = quoted_text(session)
     if quoted:
         question = f"被回复消息：\n{quoted}\n\n用户当前请求：\n{question or '请结合上面的消息回答。'}"
-    await service.submit(session, key, question, chain, sticky)
+    await service.submit(session, key, question, chain)
 
 
 @command.on(Alconna(conf.stop_command))
@@ -124,12 +120,12 @@ async def help_command(session: Session[MessageCreatedEvent]):
         return
     await service.send(session, "\n".join([
         f"{conf.command} <问题>：检索问答，支持最多4张图片；简单回答直接返回文字，Markdown 回答返回压缩 JPG。",
-        f"{conf.command} -s <问题>：开启续接；后续仍用 {conf.command} 提问。",
-        f"{conf.command} reset：清空你的会话。",
-        f"{conf.stop_command}：停止本人的当前任务，等待资源收尾。",
+        f"{conf.command} reset：清空你的来源链接记录。",
+        f"{conf.stop_command}：停止本人在当前频道的所有任务，等待资源收尾。",
         f"/link（或 {conf.link_command}）：回复一条回答获取其来源标题＋链接；不引用则取本人最近一次回答。",
-        "会话按机器人/群组/成员隔离，仅存内存；重启或超时后失效。",
-        "忙时明确拒绝，不插话、不排队；不监听普通聊天；引用消息的文字和图片会并入本次提问。",
+        f"每个 Q 独立执行，同一人也可并发；全局最多 {conf.max_concurrent} 个任务，满额拒绝、不排队。",
+        "不保存对话历史；回复消息仅携带该条消息的文字和图片，不自动恢复完整对话；不监听普通聊天。",
+        "来源链接按机器人/频道/成员隔离，仅存内存；重启或过期后失效。",
     ]))
 
 

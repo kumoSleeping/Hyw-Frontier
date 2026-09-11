@@ -1,11 +1,11 @@
-"""Bounded, per-account/channel/member conversation ownership."""
+"""Independent concurrent requests with bounded, owner-scoped source records."""
 from __future__ import annotations
 
 import asyncio
 import json
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from arclet.entari import Image, MessageChain, Text
@@ -23,16 +23,6 @@ from .trace import BotTrace
 Scope = tuple[str, str, str, str, str]
 
 
-@dataclass
-class Conversation:
-    sticky: bool = False
-    messages: list[dict] = field(default_factory=list)
-    sources: tuple[tuple[str, str], ...] = ()
-    turns: int = 0
-    size: int = 0
-    updated: float = field(default_factory=time.monotonic)
-
-
 @dataclass(frozen=True)
 class ReplySources:
     owner: Scope
@@ -45,10 +35,10 @@ class FrontierService:
     def __init__(self, config: Config):
         config.validate()
         self.config = config
-        self.records: OrderedDict[Scope, Conversation] = OrderedDict()
+        self.latest_sources: OrderedDict[Scope, ReplySources] = OrderedDict()
         # Receipt IDs are scoped to this bot/channel, not the member issuing /link.
         self.reply_sources: OrderedDict[Scope, ReplySources] = OrderedDict()
-        self.running: dict[Scope, asyncio.Task] = {}
+        self.running: dict[asyncio.Task, Scope] = {}
         self.closed = False
 
     def scope(self, session) -> Scope | None:
@@ -65,49 +55,54 @@ class FrontierService:
 
     def prune(self):
         now = time.monotonic()
-        for key, record in list(self.records.items()):
-            if key not in self.running and now - record.updated > self.config.session_ttl:
-                del self.records[key]
-        for key, record in list(self.reply_sources.items()):
-            if now - record.created > self.config.session_ttl:
-                del self.reply_sources[key]
+        caches = (self.latest_sources, self.reply_sources)
+        for cache in caches:
+            for key, record in list(cache.items()):
+                if now - record.created > self.config.source_ttl:
+                    del cache[key]
+        size = sum(record.size for cache in caches for record in cache.values())
+        while (sum(map(len, caches)) > self.config.max_source_records
+               or size > self.config.max_source_bytes):
+            oldest = min((cache for cache in caches if cache),
+                         key=lambda cache: next(iter(cache.values())).created)
+            _, removed = oldest.popitem(last=False)
+            size -= removed.size
 
     def remember_sources(self, key: Scope, receipts, sources):
-        self.prune()
         record = ReplySources(key, sources, time.monotonic(),
                               len(json.dumps(sources, ensure_ascii=False).encode('utf-8')))
+        self.latest_sources[key] = record
+        self.latest_sources.move_to_end(key)
         for receipt in receipts or []:
             if receipt.id:
                 address = (*key[:4], str(receipt.id))
                 self.reply_sources[address] = record
                 self.reply_sources.move_to_end(address)
-        size = sum(item.size for item in self.reply_sources.values())
-        while self.reply_sources and (len(self.reply_sources) > self.config.max_sessions * self.config.max_turns
-                                      or size > self.config.max_total_history_bytes):
-            _, removed = self.reply_sources.popitem(last=False)
-            size -= removed.size
+        self.prune()
 
     async def send(self, session, text: str):
         async with asyncio.timeout(self.config.send_timeout):
             return await session.send(MessageChain(Text(text)), reply_to=self.config.quote)
 
     async def stop(self, session, key: Scope):
-        task = self.running.get(key)
-        if task and not task.done():
-            task.cancel()
-            await self.send(session, "已请求停止，正在回收本轮资源；完成前不能开始下一问。")
+        tasks = [task for task, owner in self.running.items() if owner == key and not task.done()]
+        if tasks:
+            for task in tasks:
+                if not task.cancelling():
+                    task.cancel()
+            await self.send(session, f"已请求停止你的 {len(tasks)} 个任务，正在回收资源。")
         else:
             await self.send(session, "当前没有正在处理的问题。")
 
     async def reset(self, session, key: Scope):
-        if key in self.running:
-            await self.send(session, f"请先用 {self.config.stop_command} 停止当前问题，收尾后再重置。")
+        if key in self.running.values():
+            await self.send(session, f"请先用 {self.config.stop_command} 停止本人的所有任务，收尾后再清空来源记录。")
             return
-        self.records.pop(key, None)
+        self.latest_sources.pop(key, None)
         for address, record in list(self.reply_sources.items()):
             if record.owner == key:
                 del self.reply_sources[address]
-        await self.send(session, "已清空你的当前会话和来源链接。")
+        await self.send(session, "已清空你的来源链接记录；每个问题均独立执行，不保存对话历史。")
 
     async def links(self, session, key: Scope, quoted_id: str | None = None):
         self.prune()
@@ -117,7 +112,7 @@ class FrontierService:
                 await self.send(session, "未找到这条消息的来源记录；请回复本插件发出的回答。重启、过期或清空后的记录不可恢复。")
                 return
         else:
-            record = self.records.get(key)
+            record = self.latest_sources.get(key)
         sources = record.sources if record else ()
         text = "\n\n".join(f"{i}. {title}\n{readable_url(url)}" for i, (title, url) in enumerate(sources, 1))
         await self.send_chunks(session, text or "这条回答没有引用来源链接。")
@@ -128,47 +123,28 @@ class FrontierService:
             receipts.extend(await self.send(session, text[start:start + 3000]) or [])
         return receipts
 
-    async def submit(self, session, key: Scope, question: str, chain: MessageChain, sticky: bool):
+    async def submit(self, session, key: Scope, question: str, chain: MessageChain):
         self.prune()
         if self.closed:
             return
-        if key in self.running:
-            await self.send(session, f"上一问仍在处理；本条未排队、未插入。可用 {self.config.stop_command} 停止。")
-            return
         if len(self.running) >= self.config.max_concurrent:
-            await self.send(session, "当前问答任务已满，请稍后重试。")
+            await self.send(session, "当前问答任务已满，本条未排队，请稍后重试。")
             return
         if len(question) > self.config.max_question_chars:
             await self.send(session, f"问题过长，最多 {self.config.max_question_chars} 字符。")
             return
-        record = self.records.get(key)
-        if record is None:
-            if len(self.records) >= self.config.max_sessions:
-                await self.send(session, "会话容量已满，请稍后重试。")
-                return
-            record = Conversation()
-            self.records[key] = record
-        if record.sticky and record.turns >= self.config.max_turns:
-            await self.send(session, f"会话轮数已满；请用 {self.config.command} reset 开新会话，不会自动截断历史。")
-            return
-        # Reserve synchronously, before any I/O. Keep ownership through cancellation cleanup.
-        task = asyncio.create_task(self._run(session, key, record, question, chain, sticky))
-        self.running[key] = task
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if not task.done():
-                task.cancel()
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    continue
-            raise
-        finally:
-            self.running.pop(key, None)
+        # Reserve before yielding, then release the event handler immediately so even
+        # serial adapters can deliver further commands. The service owns task cleanup.
+        task = asyncio.create_task(self._run(session, key, question, chain))
+        self.running[task] = key
+        task.add_done_callback(self._finished)
 
-    async def _run(self, session, key, record, question, chain, sticky):
+    def _finished(self, task: asyncio.Task):
+        self.running.pop(task, None)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.warning("Frontier background request failed ({})", type(error).__name__)
+
+    async def _run(self, session, key, question, chain):
         started = time.monotonic()
         trace = BotTrace(self.config, question, key, session.event.message.id)
         status = "error"
@@ -185,21 +161,14 @@ class FrontierService:
         try:
             async with asyncio.timeout(self.config.timeout):
                 images = await prepare_images(chain)
-                trace.event({"type": "input_ready", "images": len(images),
-                             "history_messages": len(record.messages) if record.sticky else 0})
+                trace.event({"type": "input_ready", "images": len(images), "history_messages": 0})
                 if not question and not images:
-                    if sticky:
-                        record.sticky = True
-                        record.updated = time.monotonic()
-                        await self.send(session, f"已开启续接；后续仍需使用 {self.config.command} 提问，reset 结束。")
-                    else:
-                        await self.send(session, f"请输入问题：{self.config.command} <问题>；帮助：{self.config.help_command}")
+                    await self.send(session, f"请输入问题：{self.config.command} <问题>；帮助：{self.config.help_command}")
                     status = "done"
                     return
                 result = await answer(
                     question,
                     images=images,
-                    history=record.messages if record.sticky else None,
                     send=send_intro,
                     on_event=trace.event,
                     **self.config.answer_options(),
@@ -228,25 +197,17 @@ class FrontierService:
                     except Exception as exc:  # noqa: BLE001 - adapter-independent delivery boundary
                         trace.event({"type": "image_delivery_failed", "phase": phase, "error_type": type(exc).__name__})
                         logger.warning("Frontier request {} image delivery failed ({})", trace.id, type(exc).__name__)
-                        receipts = await self.send_chunks(session, "图片发送未确认，以下为文字版（图片可能已经送达）：\n" + result.display_text)
-                        trace.event({"type": "text_fallback_delivered", "receipt_ids": [item.id for item in receipts]})
-                # Commit only after final delivery. Failure/cancel leaves prior history intact.
+                        # A failed/expired acknowledgement cannot retract an adapter's
+                        # upload. Never resend the answer: the image may still arrive.
+                        notice = ("图片发送结果未确认，图片仍可能送达；本轮不会自动补发文字版。"
+                                  if phase == "image_delivery" else "图片编码失败，本轮未发送回答。")
+                        try:
+                            await self.send(session, notice)
+                        except Exception as delivery:  # noqa: BLE001 - no further automatic resend
+                            logger.warning("Frontier image failure notice failed ({})", type(delivery).__name__)
+                        return
+                # Only successful final delivery updates /link; history is never retained.
                 self.remember_sources(key, receipts, sources)
-                record.sources = sources
-                record.updated = time.monotonic()
-                record.sticky = record.sticky or sticky
-                if record.sticky:
-                    size = len(json.dumps(result.messages, ensure_ascii=False).encode("utf-8"))
-                    total = sum(r.size for r in self.records.values()) - record.size + size
-                    if size > self.config.max_history_bytes or total > self.config.max_total_history_bytes:
-                        record.sticky = False
-                        record.messages = []
-                        record.size = record.turns = 0
-                        await self.send(session, "回答已发送，但历史达到容量上限，已结束续接。下一问将新建上下文。")
-                    else:
-                        record.messages = result.messages
-                        record.size = size
-                        record.turns += 1
                 if result.truncated:
                     await self.send(session, "本次模型输出达到长度上限，回答可能不完整。")
                 status = "done"
@@ -264,9 +225,9 @@ class FrontierService:
             trace.event({"type": "request_failed", "error_type": type(exc).__name__, **details})
             logger.warning("Frontier request {} failed ({}) after {:.1f}s", trace.id, type(exc).__name__, time.monotonic() - started)
             if isinstance(exc, TimeoutError):
-                message = "本轮已超时并回收资源，原有会话保留。"
+                message = "本轮已超时并回收资源，其他问题不受影响。"
             else:
-                message = "本轮未完成，请检查模型/搜索凭据、附件和服务日志；原有会话保留。"
+                message = "本轮未完成，请检查模型/搜索凭据、附件和服务日志；其他问题不受影响。"
             try:
                 await self.send(session, message)
             except Exception as delivery:  # noqa: BLE001 - failed error delivery must not escape
@@ -279,10 +240,11 @@ class FrontierService:
 
     async def close(self):
         self.closed = True
-        tasks = list(self.running.values())
+        tasks = list(self.running)
         for task in tasks:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.running.clear()
-        self.records.clear()
+        self.latest_sources.clear()
         self.reply_sources.clear()
