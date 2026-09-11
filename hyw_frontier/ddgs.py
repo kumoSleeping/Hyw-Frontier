@@ -123,6 +123,4 @@ class DDGSClient:
         return {"query": params["query"], "provider": "ddgs", "mode": None,
                 "backend": params["backend"], "region": params["region"], "timelimit": params["timelimit"],
                 "max_results": params["max_results"], "results": rows, "results_truncated": False,
-                "empty": not rows, "untrusted_content": True,
-                "notice": "DDGS 自动选择搜索引擎，最多返回10条结果；地区及时间筛选支持因引擎而异，需核对来源。"
-                          + ("图片链接不代表已审阅图片或获得使用授权。" if images else "")}
+                "empty": not rows, "untrusted_content": True}

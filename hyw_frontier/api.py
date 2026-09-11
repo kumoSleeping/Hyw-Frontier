@@ -67,7 +67,8 @@ async def answer(
     search_provider: str = "parallel",
     search_mode: str = "turbo",
     turbo: bool = False,
-    reasoning: str | None = None,
+    reasoning: dict[str, str] | None = None,
+    reasoning_mode: Literal["auto", "high", "medium", "low"] = "auto",
     max_rounds: int = 30,
     timeout: float = 300,
     system_prompt: str | None = None,
@@ -108,7 +109,13 @@ async def answer(
     Built-in DeepSeek configuration always uses Responses. Other compatible endpoints can choose `api`.
     `base_url` and `api_key` override project-local connection settings.
     A native Pydantic AI `Model` instance may replace the model ID. Its provider and
-    settings are authoritative; do not also pass provider/api/base_url/api_key/reasoning/backend.
+    settings are authoritative; do not also pass provider/api/base_url/api_key/backend.
+    `reasoning` optionally opts into dynamic effort: exactly high/medium/low keys, each
+    mapped to off/low/high/max (duplicates allowed), for verified DeepSeek models.
+    `reasoning_mode='auto'` starts each question at medium; set_reasoning affects
+    subsequent model rounds. high/medium/low instead locks that tier and omits the tool.
+    Model IDs use the project mapping by default; native Models keep their own settings
+    when reasoning is omitted. Explicit mappings override only request-local effort.
     Its requests run on this caller's event loop. Its client lifecycle remains caller-owned;
     timeout/cancellation stop and join this invocation, not other users of that client.
     `home` still controls search credentials for this form.
@@ -129,8 +136,8 @@ async def answer(
         if isinstance(model, str):
             provider = DEFAULT_PROVIDER if provider is None else provider
         else:
-            if any(value is not None for value in (provider, api, base_url, api_key, reasoning, backend)):
-                raise ValueError("A Model instance owns provider and settings; do not combine it with connection/reasoning/backend arguments")
+            if any(value is not None for value in (provider, api, base_url, api_key, backend)):
+                raise ValueError("A Model instance owns provider and settings; do not combine it with connection/backend arguments")
             from .model_backend import model_identity
             native_model = model
             provider, model, _ = model_identity(native_model)
@@ -186,7 +193,8 @@ async def answer(
                 with ToolRuntime(jina, search_provider=search_provider,
                                  search_mode=search_mode, send=send_from_worker, turbo=turbo) as tools:
                     agent = SearchAgent(bridge, tools, max_rounds=max_rounds, cancel_event=cancelled,
-                                        reasoning=reasoning, search_provider=search_provider, search_mode=search_mode,
+                                        reasoning=reasoning, reasoning_mode=reasoning_mode,
+                                        search_provider=search_provider, search_mode=search_mode,
                                         turbo=turbo)
                     resources.callback(agent.release)
                     # Do not force simple caller-owned backends into the streaming protocol.

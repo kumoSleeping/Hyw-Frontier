@@ -219,9 +219,7 @@ class JinaClient:
                     **({"image_url": image_url} if images else {}),
                 })
             return {"query": query, "provider": "jina", "mode": None, "endpoint": SEARCH_ENDPOINT,
-                    "results": rows, "results_truncated": False, "empty": not rows, "untrusted_content": True,
-                    "notice": ("图片结果包含 image_url 原图和 url 来源页面；链接不代表已审阅图片或获得使用授权。" if images else "")
-                              + "Jina SVIP 使用 query 检索。地区和时间筛选由搜索引擎执行，不保证每条结果都满足，需核对来源日期。"}
+                    "results": rows, "results_truncated": False, "empty": not rows, "untrusted_content": True}
 
         return self._cached("search:" + json.dumps(body, sort_keys=True), fetch)
 

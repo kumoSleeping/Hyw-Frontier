@@ -142,15 +142,13 @@ class UserImageCrops:
                 with source.crop(tuple(bbox)) as crop:
                     block = _encode(crop)
                     marker = {"source_id": source_id, "bbox": bbox,
-                              "width": crop.width, "height": crop.height,
-                              "notice": "紧随其后的单张附件来自此原图区域；后续裁剪仍使用原图坐标"}
+                              "width": crop.width, "height": crop.height}
                 block["_crop_source"] = source_id
                 report = {"ok": True, "source_id": source_id, "bbox": bbox,
                           "source_width": width, "source_height": height,
                           "crop_width": bbox[2] - bbox[0], "crop_height": bbox[3] - bbox[1],
                           "width": marker["width"], "height": marker["height"],
-                          "crop_count": 1, "original_preserved": True,
-                          "notice": "仅返回指定区域的一张图；裁剪不恢复缺失细节，不保证文字更易辨认"}
+                          "crop_count": 1, "original_preserved": True}
                 return report, [_marker("user_image_crop", marker), block]
             except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
                 return {"ok": False, "code": "crop_failed", "source_id": source_id,

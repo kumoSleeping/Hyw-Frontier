@@ -24,8 +24,12 @@ plugins:
     help_command: /qhelp
     link_command: /link
     provider: deepseek
-    model: deepseek-v4.1-flash-expires-on-0910
-    reasoning: "off"
+    model: deepseek-flash
+    reasoning_mode: auto  # auto 自动切换；high/medium/low 固定档位
+    reasoning:  # 三个键必须同时提供，值允许重复；替代旧的单字符串配置
+      high: max
+      medium: low
+      low: "off"
     search_provider: jina
     timeout: 300
     request_timeout: 90

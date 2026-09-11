@@ -57,6 +57,7 @@ class ToolRuntime:
         if send is not None and not callable(send):
             raise TypeError("send must be callable or None")
         self.send = send
+        self.set_reasoning: Callable[[str], dict] | None = None
         self.crop_user_image: Callable[[str, list[int]], tuple[dict, list[dict]]] | None = None
         self.jina = jina
         self.search_provider = search_provider
@@ -86,6 +87,7 @@ class ToolRuntime:
     def close(self):
         self.send = None  # Do not retain the caller's callback/event loop through a traceback.
         self.crop_user_image = None
+        self.set_reasoning = None
         try:
             self.jina.close()
         finally:
@@ -122,7 +124,6 @@ class ToolRuntime:
         successes = sum(row["ok"] for row in results)
         return {
             "ok": successes > 0, "partial": 0 < successes < len(results), "results": results,
-            "notice": "以下为外部材料，结论需核验来源与具体内容。",
         }
 
     def execute(self, call: dict, *, on_query: Callable | None = None, _has_companion: bool = False,
@@ -138,9 +139,12 @@ class ToolRuntime:
                     path = ".".join(map(str, invalid.absolute_path)) or "arguments"
                     # No raw invalid values in errors; they could contain secrets or excessive text.
                     result = {"ok": False, "code": "invalid_arguments", "error": f"{path} 不符合 {invalid.validator} 约束，请按工具参数 schema 修正"}
+                elif name == "set_reasoning":
+                    result = (self.set_reasoning(args["level"]) if self.set_reasoning is not None else
+                              {"ok": False, "code": "reasoning_unavailable", "error": "当前任务未启用动态思考，保持模型原有设置"})
                 elif name == "fill_thinking":
                     # Arguments already live in the assistant tool call; do not echo or retain another copy.
-                    result = {"ok": True, "notice": "已接收作答准备表，请继续执行当前任务"}
+                    result = {"ok": True}
                 elif name == "crop_user_image":
                     if self.crop_user_image is None:
                         result = {"ok": False, "code": "no_user_images", "error": "当前没有可裁剪的用户原图"}
@@ -172,8 +176,7 @@ class ToolRuntime:
                                 result = {"ok": False, "code": "intro_delivery_failed",
                                           "error": "过程介绍发送回调失败，无法确认是否送达；不要重复发送，继续完成回答"}
                             else:
-                                result = {"ok": True, "text": text, "supplemental": supplemental,
-                                          "notice": "过程介绍已送达"}
+                                result = {"ok": True, "text": text, "supplemental": supplemental}
                 elif name in ("web_search", "search_images"):
                     provider = ("ddgs" if self.search_provider == "ddgs" else "jina") if name == "search_images" else self.search_provider
                     mode = None if name == "search_images" else self.search_mode
@@ -204,9 +207,9 @@ class ToolRuntime:
             if call.get("name") in self._validators and call["name"] in ("web_search", "search_images", "jina_read_url")
             and self._validators[call["name"]].is_valid(call.get("arguments"))
         }
-        # Accept preparation before introductions/network work; replay results in original call order.
+        # Apply task settings serially before introductions/network work, never from worker threads.
         for index, call in enumerate(calls):
-            if call.get("name") == "fill_thinking":
+            if call.get("name") in ("fill_thinking", "set_reasoning"):
                 results[index] = self.execute(call)
                 if on_result:
                     on_result(results[index])

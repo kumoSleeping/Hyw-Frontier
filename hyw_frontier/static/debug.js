@@ -127,7 +127,8 @@ export function createTrace(article, anchor, scroll) {
       box(root, "本次问题与请求配置", "request-settings").pre.textContent = JSON.stringify(item, null, 2);
     } else if (item.type === "model_start") {
       const current = round(item.round);
-      current.reasoning = item.reasoning ?? "模型默认";
+      const tier = { high: "高", medium: "中", low: "低" }[item.reasoning_level];
+      current.reasoning = tier ? `${tier} → ${item.reasoning}` : (item.reasoning ?? "模型默认");
       current.node.dataset.reasoning = current.reasoning;
       current.title.textContent = `第 ${item.round} 轮 · 思考 ${current.reasoning} · 模型输出`;
     } else if (["text_start", "thinking_start", "toolcall_start"].includes(item.type)) block(item);

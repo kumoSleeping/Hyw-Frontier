@@ -17,7 +17,7 @@ PACKAGE = Path(__file__).resolve().parent
 DEFAULT_PROMPT = PACKAGE / "prompts" / "system.md"
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_LANGUAGE = "中文"
-DEFAULT_MODEL = "deepseek-v4.1-flash-expires-on-0910"
+DEFAULT_MODEL = "deepseek-flash"
 
 
 def render_prompt(prompt: str, *, language: str = DEFAULT_LANGUAGE, turbo: bool = False) -> str:

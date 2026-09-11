@@ -1,5 +1,5 @@
 const labels = { off: "关闭 · 不启用思考", low: "Low · 轻度思考", high: "High · 深度思考", max: "Max · 最高强度" };
-const storageKey = "frontier.reasoning";
+const storageKey = "frontier.reasoning.mapping";
 const searchModeLabels = {
   turbo: "Turbo · 优先速度",
   fast: "Fast · 快速高质量",
@@ -62,32 +62,50 @@ export function createSearchProviderControl({ select, modeSelect, hint, config, 
   };
 }
 
-export function createReasoningControl({ select, hint, provider, model, config, storage }) {
-  select.replaceChildren();
-  for (const level of config.levels) {
-    const option = select.ownerDocument.createElement("option");
-    option.value = level;
-    option.textContent = labels[level] ?? level;
-    select.append(option);
-  }
-  let saved;
-  try { saved = storage.getItem(storageKey); } catch { /* Storage may be unavailable. */ }
-  select.value = config.levels.includes(saved) ? saved : config.default;
-  const supported = () => provider.value === config.provider && config.models.includes(model.value.trim());
-  select.addEventListener("change", () => {
-    if (supported() && config.levels.includes(select.value)) {
-      try { storage.setItem(storageKey, select.value); } catch { /* Keep the in-page choice. */ }
+export function createReasoningControl({ modeSelect, selects, hint, provider, model, config, storage }) {
+  const modes = ["auto", ...config.tiers];
+  const modeKey = "frontier.reasoning.mode";
+  let savedMode;
+  try { savedMode = storage.getItem(modeKey); } catch { /* Storage may be unavailable. */ }
+  modeSelect.value = modes.includes(savedMode) ? savedMode : "auto";
+  modeSelect.addEventListener("change", () => {
+    if (modes.includes(modeSelect.value)) {
+      try { storage.setItem(modeKey, modeSelect.value); } catch { /* Keep the in-page choice. */ }
     }
   });
+  let saved;
+  try { saved = JSON.parse(storage.getItem(storageKey)); } catch { /* Storage may be unavailable. */ }
+  const valid = saved && !Array.isArray(saved) && typeof saved === "object"
+    && Object.keys(saved).length === config.tiers.length
+    && config.tiers.every(tier => config.levels.includes(saved[tier]));
+  const mapping = () => Object.fromEntries(config.tiers.map(tier => [tier, selects[tier].value]));
+  const supported = () => provider.value === config.provider && config.models.includes(model.value.trim());
+  for (const tier of config.tiers) {
+    const select = selects[tier];
+    select.replaceChildren();
+    for (const level of config.levels) {
+      const option = select.ownerDocument.createElement("option");
+      option.value = level;
+      option.textContent = labels[level] ?? level;
+      select.append(option);
+    }
+    select.value = valid ? saved[tier] : config.mapping[tier];
+    select.addEventListener("change", () => {
+      if (supported() && config.levels.includes(select.value)) {
+        try { storage.setItem(storageKey, JSON.stringify(mapping())); } catch { /* Keep the in-page choice. */ }
+      }
+    });
+  }
   return {
     update(busy = false) {
-      select.disabled = busy || !supported();
+      modeSelect.disabled = busy || !supported();
+      for (const select of Object.values(selects)) select.disabled = busy || !supported();
       hint.textContent = supported()
-        ? "从下一次提问起生效，覆盖该次全部模型轮次；本浏览器记住选择。"
-        : "此控件仅支持已验证的 DeepSeek 4.1 内测模型；当前模型保持原有默认行为。";
+        ? "自动思考默认中档，模型按难度切换后续轮次；固定档位则不自动切换。无论哪种模式都传入三个映射，可全部相同；本浏览器记住选择。"
+        : "此控件仅支持已验证的 DeepSeek 模型；当前模型保持原有默认行为。";
     },
     requestSettings() {
-      return supported() ? { reasoning: select.value } : {};
+      return supported() ? { reasoning: mapping(), reasoning_mode: modeSelect.value } : {};
     },
   };
 }

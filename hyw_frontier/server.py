@@ -19,9 +19,10 @@ from .image_input import IMAGE_INPUT_CONFIG, ImageInputError, validate_images
 from .image_crop import CROP_CONFIG
 from .jina import SEARCH_ENDPOINT as JINA_SEARCH_ENDPOINT, JinaError, load_jina_key
 from .media import MEDIA_CONFIG
+from .model_limits import known_output_limit
 from .favicons import FAVICON_CONFIG
 from .parallel import load_parallel_key, SEARCH_MODE, SEARCH_MODES
-from .reasoning import reasoning_config, resolve_reasoning
+from .reasoning import reasoning_config, resolve_reasoning, resolve_reasoning_mode
 from .request_log import RequestLog, utc_now
 from .rendering import CardRenderer, ImageStore, RenderError, RENDER_ENGINE
 from .render_protocol import answer_text, parse_answer
@@ -121,7 +122,9 @@ class App:
                                          "cache_cleared_on_close": True,
                                          "clients_by_provider": {"jina": "urllib3", "parallel": "urllib3", "ddgs": "primp"}},
                               "model": {"library": "pydantic-ai-slim", "runtime": "python", "input": "model_instance",
-                                        "scope": "task", "automatic_retries": False},
+                                        "scope": "task", "automatic_retries": False,
+                                        "output_limit_policy": "model_maximum",
+                                        "max_output_tokens": known_output_limit(DEFAULT_PROVIDER, DEFAULT_MODEL)},
                               "deepseek": {"mode": "python_async_client", "api": "responses",
                                            "credential_scope": "task_snapshot"}},
                 "completion_timing": "answer_plus_render", "image_input": {**IMAGE_INPUT_CONFIG, "crop": CROP_CONFIG},
@@ -298,6 +301,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Invalid search settings")
         effective_search_mode = search_mode if search_provider == "parallel" else None
         reasoning = resolve_reasoning(provider, model, data.get("reasoning"))
+        reasoning_mode = resolve_reasoning_mode(data.get("reasoning_mode", "auto"))
+        if reasoning is None and reasoning_mode != "auto":
+            raise ValueError("当前模型不支持固定思考档位")
         session = self.server.app.session(data.get("session"))
         if not session.lock.acquire(blocking=False):
             return self._json(409, {"error": "此会话已有请求正在运行"})
@@ -310,7 +316,7 @@ class Handler(BaseHTTPRequestHandler):
         event_lock = Lock()
         agent = None
         trace = RequestLog(self.server.app.home, {"message": text, "provider": provider, "model": model,
-                                                 "reasoning": reasoning,
+                                                 "reasoning": reasoning, "reasoning_mode": reasoning_mode,
                                                  "search_provider": search_provider, "turbo": turbo,
                                                  "images": [{"mimeType": image["mimeType"], "base64_length": len(image["data"])} for image in images],
                                                  "search_mode": effective_search_mode, "max_rounds": rounds})
@@ -340,6 +346,7 @@ class Handler(BaseHTTPRequestHandler):
             if session.turns >= 20:
                 raise AgentLimitError("本测试会话已达20轮，请新建对话；不会自动压缩或删除上下文。")
             send({"type": "start", "provider": provider, "model": model, "reasoning": reasoning,
+                  "reasoning_mode": reasoning_mode,
                   "search_provider": search_provider, "search_mode": effective_search_mode, "turbo": turbo})
             # Lazily construct the configured native Model on the task's own loop.
             # The instance then uses the same settings-preserving adapter as answer(model=...).
@@ -348,10 +355,12 @@ class Handler(BaseHTTPRequestHandler):
             home, timeout = self.server.app.home, self.server.app.timeout
             def model_factory(name):
                 connection = CredentialStore(home, timeout, session.cancel).connection(provider)
-                return configured_model(connection, name, timeout, reasoning)
+                initial_level = "medium" if reasoning_mode == "auto" else reasoning_mode
+                return configured_model(connection, name, timeout, reasoning[initial_level] if reasoning is not None else None)
             bridge = Bridge(home, timeout, session.cancel, model_factory=model_factory)
             agent = self.server.app.agent_factory(bridge, on_event=send, cancel_event=session.cancel,
-                                                  max_rounds=rounds, reasoning=reasoning, search_mode=search_mode,
+                                                  max_rounds=rounds, reasoning=reasoning, reasoning_mode=reasoning_mode,
+                                                  search_mode=search_mode,
                                                   search_provider=search_provider, turbo=turbo)
             prompt = session.turbo_system_prompt if turbo else session.system_prompt
             trace.write({"type": "prompt", "system_prompt": prompt})

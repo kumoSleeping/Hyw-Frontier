@@ -667,6 +667,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "ddgs" },
+    { name = "httpx" },
     { name = "jsonschema" },
     { name = "md2png", extra = ["hyw", "math"] },
     { name = "pydantic-ai-slim", extra = ["openai"] },
@@ -684,6 +685,7 @@ google = [
 [package.metadata]
 requires-dist = [
     { name = "ddgs", specifier = ">=9.16,<10" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "md2png", extras = ["hyw", "math"], editable = "md2png" },
     { name = "pydantic-ai-slim", extras = ["anthropic"], marker = "extra == 'anthropic'", specifier = "==2.42.0" },

@@ -7,6 +7,7 @@ from arclet.entari import BasicConfModel
 
 from hyw_frontier.parallel import SEARCH_MODES
 from hyw_frontier.runtime import DEFAULT_MODEL
+from hyw_frontier.reasoning import resolve_reasoning, resolve_reasoning_mode
 from hyw_frontier.tools import SEARCH_PROVIDERS
 
 
@@ -23,7 +24,8 @@ class Config(BasicConfModel):
     api_key_env: str = ""
     home: str = ""
     language: str = "中文"
-    reasoning: str | None = None
+    reasoning: dict[str, str] | None = None
+    reasoning_mode: str = "auto"
     search_provider: str = "jina"
     search_mode: str = "turbo"
     turbo: bool = False
@@ -74,12 +76,16 @@ class Config(BasicConfModel):
             raise ValueError("jpeg_quality must be between 50 and 95")
         if not self.model.strip():
             raise ValueError("An explicit model ID is required")
+        mapping = resolve_reasoning(self.provider, self.model, self.reasoning)
+        resolve_reasoning_mode(self.reasoning_mode)
+        if mapping is None and self.reasoning_mode != "auto":
+            raise ValueError("Fixed reasoning tiers require a supported model")
 
     def answer_options(self):
         import os
 
         options = {name: getattr(self, name) for name in (
-            "provider", "model", "api", "base_url", "language", "reasoning",
+            "provider", "model", "api", "base_url", "language", "reasoning", "reasoning_mode",
             "search_provider", "search_mode", "turbo", "max_rounds",
         )}
         options["timeout"] = self.request_timeout

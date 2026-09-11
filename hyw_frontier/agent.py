@@ -12,7 +12,7 @@ from .jina import JinaClient
 from .image_crop import UserImageCrops
 from .favicons import FaviconPipeline
 from .media import ImagePipeline, MAX_IMAGES, MAX_IMAGES_PER_ROUND
-from .reasoning import resolve_reasoning
+from .reasoning import RECONSIDER_PROMPT, needs_reconsideration, resolve_reasoning, resolve_reasoning_mode
 from .prompt_modes import render_mode_text
 from .runtime import Bridge, DEFAULT_MODEL
 from .parallel import SEARCH_MODE, SEARCH_MODES
@@ -25,8 +25,8 @@ class AgentLimitError(RuntimeError):
 
 class SearchAgent:
     def __init__(self, bridge, tools: ToolRuntime | None = None, *, max_rounds: int = 30, max_calls: int | None = None,
-                 on_event: Callable | None = None, cancel_event: Event | None = None, reasoning: str | None = None,
-                 search_mode: str = SEARCH_MODE, search_provider: str = SEARCH_PROVIDER,
+                 on_event: Callable | None = None, cancel_event: Event | None = None, reasoning: dict[str, str] | None = None,
+                 reasoning_mode: str = "auto", search_mode: str = SEARCH_MODE, search_provider: str = SEARCH_PROVIDER,
                  prefetch_icons: bool = True, turbo: bool = False):
         if type(turbo) is not bool:
             raise TypeError("turbo 必须是布尔值。")
@@ -59,6 +59,7 @@ class SearchAgent:
         self.on_event = on_event or (lambda event: None)
         self.cancel_event = cancel_event
         self.reasoning = reasoning
+        self.reasoning_mode = resolve_reasoning_mode(reasoning_mode)
 
     def release(self):
         """Drop task scratch data after the caller has copied messages/rendered images.
@@ -67,6 +68,7 @@ class SearchAgent:
         Tool and bridge lifetimes are managed by their existing context managers.
         """
         self.context = None
+        self.tools.set_reasoning = None
         self.tools.crop_user_image = None
         if self._crops is not None:
             self._crops.close()
@@ -142,6 +144,7 @@ class SearchAgent:
             raise
         finally:
             # Decoded user pixels are not needed by the renderer; release before rendering.
+            self.tools.set_reasoning = None
             self.tools.crop_user_image = None
             if self._crops is not None:
                 self._crops.close()
@@ -154,15 +157,25 @@ class SearchAgent:
         self.on_event({**event, 'round': round_number})
 
     def _run(self, provider: str, model: str, context: dict) -> dict:
-        # Native model settings are authoritative; UI reasoning is metadata in that path.
-        reasoning = (self.reasoning if getattr(self.bridge, 'uses_model_settings', False) else
+        # Borrowed models retain their settings unless the caller explicitly opts into a mapping.
+        reasoning = (None if self.reasoning is None and getattr(self.bridge, 'uses_model_settings', False) else
                      resolve_reasoning(provider, model, self.reasoning))
-        settings = {"reasoning": reasoning} if reasoning is not None else {}
+        initial_level = "medium" if self.reasoning_mode == "auto" else self.reasoning_mode
+        if reasoning is None and self.reasoning_mode != "auto":
+            raise ValueError("固定思考档位需要当前模型支持的三档映射")
+        settings = {"reasoning": reasoning[initial_level], "reasoning_level": initial_level} if reasoning is not None else {}
+
+        def set_reasoning(level):
+            settings.update(reasoning=reasoning[level], reasoning_level=level)
+            return {"ok": True, "level": level, "reasoning": reasoning[level], "effective": "next_round"}
+
+        self.tools.set_reasoning = set_reasoning if reasoning is not None and self.reasoning_mode == "auto" else None
         self.context = deepcopy(context)
         self.context["systemPrompt"] = render_mode_text(self.context["systemPrompt"], turbo=self.turbo)
         if not self.context["systemPrompt"].strip():
             raise AgentLimitError("系统提示词不能为空。")
-        self.on_event({"type": "effective_prompt", "system_prompt": self.context["systemPrompt"]})
+        base_prompt = self.context["systemPrompt"]
+        self.on_event({"type": "effective_prompt", "system_prompt": base_prompt})
         self._check_cancelled()
         crops = None if self.turbo else UserImageCrops(self.context["messages"])
         self._crops = crops
@@ -170,7 +183,8 @@ class SearchAgent:
         # Runtime definitions own provider/mode-specific descriptions as well as execution.
         requested = {tool["name"] for tool in self.context["tools"]}
         self.context["tools"] = [tool for tool in self.tools.definitions if tool["name"] in requested
-                                 and (tool["name"] != "crop_user_image" or (crops and crops.originals))]
+                                 and (tool["name"] != "crop_user_image" or (crops and crops.originals))
+                                 and (tool["name"] != "set_reasoning" or self.tools.set_reasoning is not None)]
         media = None if self.turbo else ImagePipeline(self.context["messages"])
         self._media = media
         self.image_assets = media.assets if media else {}
@@ -186,6 +200,18 @@ class SearchAgent:
         for _ in range(self.max_rounds):
             self._check_cancelled()
             round_number = _ + 1
+            reasoning_settings = {"mode": self.reasoning_mode, "mapping": reasoning,
+                                  "level": settings.get("reasoning_level"), "effort": settings.get("reasoning")}
+            previous = next((message for message in reversed(self.context["messages"])
+                             if message.get("role") == "assistant"), None)
+            reconsider = needs_reconsideration(previous, provider, model, reasoning_settings)
+            # Only the first request after a change gets the reminder; never rewrite
+            # the shared/session prompt or accumulate it in conversation messages.
+            prompt = f"{base_prompt}\n\n{RECONSIDER_PROMPT}" if reconsider else base_prompt
+            if prompt != self.context["systemPrompt"]:
+                self.context["systemPrompt"] = prompt
+                self.on_event({"type": "effective_prompt", "round": round_number,
+                               "system_prompt": prompt, "reasoning_reconsider": reconsider})
             if self._favicons is not None:
                 self._favicons.reset_stream()
             started = time.monotonic()
@@ -199,6 +225,7 @@ class SearchAgent:
                                "image_round_budget": MAX_IMAGES_PER_ROUND})
             try:
                 self.on_event({"type": "model_start", "round": round_number, **settings,
+                               "reasoning_reconsider": reconsider,
                                "images_sent": images_sent, "new_images_sent": images_sent - previously_sent,
                                "image_budget": MAX_IMAGES, "image_round_budget": MAX_IMAGES_PER_ROUND})
                 previously_sent = images_sent
@@ -212,6 +239,7 @@ class SearchAgent:
                     times["model_ms"] += (time.monotonic() - model_started) * 1000
                     emit_timing("model")
                 self._check_cancelled()
+                response = {**response, "reasoning_settings": deepcopy(reasoning_settings)}
                 self.context["messages"].append(response)
                 self.on_event({"type": "model_response", "round": round_number, "response": response})
                 if self._favicons is not None:

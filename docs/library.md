@@ -16,6 +16,8 @@ pip install dist/md2png-0.1.0-py3-none-any.whl dist/hyw_frontier-0.1.0-py3-none-
 
 模型与搜索凭据仍使用独立配置目录（默认 `~/.hyw-frontier`，或指定 `home=Path(...)`）和环境变量，兼容原 `auth.json` 中的 API Key。旧 OAuth 凭据保留但不使用；`openai-codex` OAuth 不属于当前支持路径。不读取 Pi 的全局提示词、会话或工具。也可通过 `backend=` 传入提供 `home` 和同步 `call(request)` 的调用方自有模型对象，它自行负责连接、超时与取消，不能同时传入 `home`、`api`、`base_url` 或 `api_key`。
 
+使用模型 ID 字符串或本地调试页面时，最大输出额度自动按模型容量设置，无需用户配置。DeepSeek V4 系列使用官方公布的 384,000 tokens（思考与正文共用），不再统一限制为 8,192。其他模型优先读取提供商容量元数据；原生提供商未返回容量时查询 Models.dev 的对应提供商目录（只下载公开目录，不发送凭据或对话；进程内缓存一小时）。兼容端点只信任其自身元数据，不根据同名模型猜测容量；无法确定上限时明确报错，不静默使用较小默认值。直接注入的外部模型实例仍遵循下述设置保留约定。
+
 ## 直接传入 Pydantic AI 模型实例
 
 `model=` 同时接受模型 ID 字符串和 Pydantic AI 的 `Model` **实例**，不接受类本身，也不需要 hyw 专用包装类。把端点、模型和思考强度配置在实例上：
@@ -36,7 +38,7 @@ async def main():
         max_retries=0,
     ) as client:
         llm = OpenAIResponsesModel(
-            "deepseek-v4.1-flash-expires-on-0910",
+            "deepseek-flash",
             provider=DeepSeekProvider(openai_client=client),
             settings={"openai_reasoning_effort": "high", "openai_store": False},
         )
@@ -48,7 +50,8 @@ asyncio.run(main())
 ```
 
 - 直接使用实例的 `settings`，不会覆盖其思考强度、token 上限、温度、SDK 超时或连接配置；不修改实例。上面的 `AsyncOpenAI` 仅用于显式控制连接生命周期，也可以使用你已有的 Pydantic AI 提供商实例。
-- 不再同时传 `provider`、`api`、`base_url`、`api_key`、`reasoning` 或 `backend`，冲突会明确报错。`home` 仍可指定**搜索工具**凭据目录，模型不读取 hyw 的模型凭据文件。
+- 不再同时传 `provider`、`api`、`base_url`、`api_key` 或 `backend`，冲突会明确报错。`home` 仍可指定**搜索工具**凭据目录，模型不读取 hyw 的模型凭据文件。
+- `reasoning` 可显式启用动态三档，例如 `{"high": "max", "medium": "low", "low": "off"}`。必须恰好包含这三个键，每个值可选 `off/low/high/max`，允许任意重复，不接受旧的单字符串。仅支持 `reasoning.json` 中已验证的 DeepSeek 模型；每次提问默认中档，`set_reasoning` 从下一模型轮次生效。不传时，模型 ID 使用项目默认映射，注入的 `Model` 保留自己的设置；显式映射只覆盖单次请求的 effort，不修改实例。`reasoning_mode="auto"` 为默认自动模式；设为 `"high"`、`"medium"` 或 `"low"` 可固定档位并禁用切换工具，仍使用完整三档映射。
 - 支持流式文本和函数工具的 Pydantic AI 模型适配器可使用这一入口，包括其他供应商的原生模型。hyw 保留自己的系统提示词、工具注册表、历史和图片预算，不运行 Pydantic AI Agent。
 - 模型请求在调用 `answer()` 的事件循环中执行，工具编排与绘图仍在工作线程/隔离进程。共享实例应在**同一个事件循环**中使用，不要跨多个 `asyncio.run()` 复用已使用过的异步客户端。只要模型/客户端本身支持并发，同一实例可服务多个并发 `answer()`。
 - hyw 不进入或退出外部模型的上下文，不关闭其客户端。取消只取消并等待本次请求收尾，不取消使用同一客户端的其他问答；`timeout` 仍作为本次单轮请求的外层时间上限，不改写实例的 SDK 设置。

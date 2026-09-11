@@ -248,8 +248,7 @@ class ImagePipeline:
                                bytes=len(jpeg), mimeType='image/jpeg')
                     image_blocks.setdefault(candidate.owner, []).extend([
                         {'type': 'text', 'text': json.dumps({
-                            'media_attachment': row['image_id'], 'url': candidate.url,
-                            'notice': '紧随此标记的图片仅对应此 ID 和 URL；图片下方说明由你写入该 URL 的 Markdown alt 文本'},
+                            'media_attachment': row['image_id'], 'url': candidate.url},
                             ensure_ascii=False)},
                         {'type': 'image', 'mimeType': 'image/jpeg', 'data': base64.b64encode(jpeg).decode('ascii')},
                     ])

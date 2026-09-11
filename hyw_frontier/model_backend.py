@@ -15,6 +15,7 @@ import time
 
 from .credentials import ModelConnection
 from .errors import FrontierError
+from .model_limits import resolve_output_limit
 from .tools import SEARCH_PROVIDERS, tool_definitions
 
 
@@ -121,9 +122,11 @@ def model_identity(model):
     return model.system, model.model_name, api
 
 
-def default_model_settings(api, timeout, reasoning=None):
+def default_model_settings(api, timeout, reasoning=None, *, max_output_tokens=None):
     """Defaults only for models constructed by hyw, never for caller-supplied instances."""
-    settings = {"max_tokens": 8192, "timeout": timeout}
+    settings = {"timeout": timeout}
+    if max_output_tokens is not None:
+        settings["max_tokens"] = max_output_tokens
     if api in ("responses", "chat"):
         settings["openai_store"] = False
         if api == "responses":
@@ -190,7 +193,7 @@ class ModelSession:
         self.client = None
         self.closed = False
 
-    async def _model(self, name, reasoning=None):
+    async def _model(self, name, reasoning=None, *, resolve_capacity=True):
         if self.model is not None:
             if name != self.model_name:
                 raise FrontierError("同一任务不能切换模型。")
@@ -233,13 +236,16 @@ class ModelSession:
                 self.resources.callback(self.client.close)
                 self.resources.push_async_callback(self.client.aio.aclose)
                 self.model = GoogleModel(name, provider=provider, settings=settings)
+            if resolve_capacity:
+                limit = await resolve_output_limit(config, self.client, name)
+                self.model.settings["max_tokens"] = limit
             self.model_name = name
             return self.model
         except ImportError:
             raise FrontierError(f"缺少 {config.api} 接入依赖，请安装 hyw-frontier[{config.api}] 可选依赖。") from None
 
     async def _request(self, request, on_event):
-        from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPart, ThinkingPart, ToolCallPart, TextPartDelta, ThinkingPartDelta, ToolCallPartDelta
+        from pydantic_ai.messages import ModelResponse, PartStartEvent, PartDeltaEvent, TextPart, ThinkingPart, ToolCallPart, TextPartDelta, ThinkingPartDelta, ToolCallPartDelta
         from pydantic_ai.models import ModelRequestParameters
         from pydantic_ai.tools import ToolDefinition
         model = await self._model(request["model"], request.get("reasoning"))
@@ -247,14 +253,29 @@ class ModelSession:
         parameters = ModelRequestParameters(function_tools=[ToolDefinition(
             name=t["name"], description=t["description"], parameters_json_schema=t["parameters"], strict=False)
             for t in request["context"]["tools"]], allow_text_output=True)
-        # Copy the mapping, never mutate the caller's model or layer hyw defaults over it.
+        # Never mutate a borrowed/shared Model; explicit dynamic effort is request-local.
         settings = (dict(model.settings) if model.settings else None) if self.preserve_settings else default_model_settings(
-            self.api, self.timeout, request.get("reasoning"))
+            self.api, self.timeout, request.get("reasoning"), max_output_tokens=model.settings["max_tokens"])
+        if request.get("reasoning") is not None:
+            if self.api not in ("responses", "chat"):
+                raise FrontierError("动态思考仅支持已验证模型的 Responses/Chat 接口。")
+            settings = {**(settings or {}), "openai_reasoning_effort":
+                        "none" if request["reasoning"] == "off" else request["reasoning"]}
+        if self.provider == "deepseek" and self.api == "responses" and (settings or {}).get("openai_reasoning_effort") != "none":
+            # Off-mode turns contain no reasoning item. DeepSeek requires the field when
+            # replaying assistant history with tools after enabling thinking. Send an empty
+            # raw item, never invented reasoning; leave real reasoning and stored history intact.
+            for index, message in enumerate(messages):
+                if (isinstance(message, ModelResponse) and message.provider_name == "deepseek"
+                        and not any(isinstance(part, ThinkingPart) for part in message.parts)):
+                    message.parts = [ThinkingPart("", id=f"rs_empty_{index}", provider_name="deepseek",
+                                                  provider_details={"raw_content": [""]}), *message.parts]
         if request["command"] != "stream":
             return _response(await model.request(messages, settings, parameters), self.provider, request["model"], self.api)
         emit = on_event or (lambda event: None)
         emit({"type": "model_stream_start", "provider": self.provider, "model": request["model"], "api": self.api,
-              "model_input": "instance" if self.preserve_settings else "model_id"})
+              "model_input": "instance" if self.preserve_settings else "model_id",
+              "max_output_tokens": (settings or {}).get("max_tokens")})
         thinking_parts, thinking_text = {}, {}
 
         def emit_thinking(index, part):
@@ -368,7 +389,7 @@ class ModelSession:
             raise safe_model_error(error) from None
 
     async def _list_models(self):
-        await self._model("catalog")
+        await self._model("catalog", resolve_capacity=False)
         if self.connection.api == "google":
             return [{"id": row.name, "name": row.display_name or row.name} async for row in await self.client.aio.models.list()]
         page = await self.client.models.list()

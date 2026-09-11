@@ -13,7 +13,7 @@ $("toggle-settings").addEventListener("click", () => {
   const expanded = document.querySelector(".sidebar").classList.toggle("settings-open");
   $("toggle-settings").setAttribute("aria-expanded", String(expanded));
 });
-const defaults = { deepseek: "deepseek-v4.1-flash-expires-on-0910", openai: "gpt-4o-mini", anthropic: "", google: "", "openai-compatible": "" };
+const defaults = { deepseek: "deepseek-flash", openai: "gpt-4o-mini", anthropic: "", google: "", "openai-compatible": "" };
 const imageResult = createImageResult($("result"));
 const processIntro = createProcessIntro($("process-intro"));
 const searchProgress = createSearchProgress($("search-progress"));
@@ -189,7 +189,9 @@ window.addEventListener("pagehide", () => { imageResult.clear(); imageInput.clea
     $("provider").value = config.provider; $("model").value = config.model;
     const storage = { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) };
     reasoningControl = createReasoningControl({
-      select: $("reasoning"), hint: $("reasoning-hint"), provider: $("provider"), model: $("model"), config: config.reasoning, storage,
+      modeSelect: $("reasoning-mode"),
+      selects: { high: $("reasoning-high"), medium: $("reasoning-medium"), low: $("reasoning-low") },
+      hint: $("reasoning-hint"), provider: $("provider"), model: $("model"), config: config.reasoning, storage,
     });
     searchControl = createSearchProviderControl({ select: $("search-provider"), modeSelect: $("search-mode"),
       hint: $("search-hint"), config: config.search, storage });

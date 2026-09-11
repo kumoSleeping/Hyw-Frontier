@@ -1,6 +1,6 @@
 # Hyw Frontier
 
-Hyw Frontier 是 Hyw 基于 deepseek-v4.1-flash-expires-on-0910 开发的下一代 Hyw 核心，提供无需浏览器的 PIL 快速原生 Markdown 渲染, 提供自动多处链路优化、压缩，以及下载超时、图片裁剪、搜索结果筛选等功能。
+Hyw Frontier 是 Hyw 基于 DeepSeek V4.1 Flash（`deepseek-flash`）开发的下一代 Hyw 核心，提供无需浏览器的 PIL 快速原生 Markdown 渲染, 提供自动多处链路优化、压缩，以及下载超时、图片裁剪、搜索结果筛选等功能。
 
 ## 使用
 
@@ -75,7 +75,7 @@ async def main(question: str, image_path: Path | None = None) -> Answer:
         max_retries=0,
     ) as client:
         model = OpenAIResponsesModel(
-            os.environ.get("HYW_MODEL", "deepseek-v4.1-flash-expires-on-0910"),
+            os.environ.get("HYW_MODEL", "deepseek-flash"),
             provider=DeepSeekProvider(openai_client=client),
             settings={"openai_reasoning_effort": "low", "openai_store": False},
         )
@@ -111,7 +111,9 @@ if __name__ == "__main__":
     # 附图调用：asyncio.run(main("分析这张图片", Path("input.png")))
 ```
 
-注入的 `Model` 决定提供商、协议和模型设置，不要同时传入 `provider`、`api`、`base_url`、`api_key`、`reasoning` 或 `backend`。共享客户端应在同一个事件循环中使用；Hyw 不关闭调用方注入的模型或客户端。示例模型为限时 ID，失效后需通过 `HYW_MODEL` 显式指定可用模型，不自动回退。
+注入的 `Model` 决定提供商、协议和模型设置，不要同时传入 `provider`、`api`、`base_url`、`api_key` 或 `backend`。不传 `reasoning` 时保留实例设置；已验证的 DeepSeek 模型可显式传入三档映射，仅逐请求覆盖思考强度，不修改共享实例。共享客户端应在同一个事件循环中使用；Hyw 不关闭调用方注入的模型或客户端。示例模型为限时 ID，失效后需通过 `HYW_MODEL` 显式指定可用模型，不自动回退。
+
+动态思考参数为 `reasoning={"high": "max", "medium": "low", "low": "off"}`，必须且只能包含高／中／低三个键，值可重复（例如全部 `"off"` 固定关闭，或只有两种实际强度）。不再接受单个字符串。每次提问从 `medium` 开始，模型通过 `set_reasoning` 切换后续轮次：特别简单用低档，特别困难、尤其图片与复杂关系交织时用高档。支持的模型 ID 默认使用上述映射；本地页面可独立设置三档，并选择“自动思考等级”或固定高／中／低。API 对应 `reasoning_mode="auto"`（默认），或 `"high"`、`"medium"`、`"low"`；固定档位不向模型开放切换工具，仍须传入完整三档映射。
 
 也可以不注入实例，直接向 `answer()` 传入模型 ID 和连接参数；更底层的模型传输可通过 `backend` 注入。完整参数、返回字段及生命周期约定见 [库接口文档](docs/library.md)。
 
