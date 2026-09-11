@@ -36,7 +36,7 @@ plugins:
     max_concurrent: 2
 ```
 
-当前模型为限时 ID，失效后需显式配置可用模型，不会自动回退。示例关闭思考，不改变核心库的默认值。支持核心库的 `provider`、`model`、`api`、`base_url`、`language`、`turbo` 和搜索设置，完整参数见 `config.py`。
+当前模型为限时 ID，失效后需显式配置可用模型，不会自动回退。示例关闭思考，不改变核心库的默认值。支持核心库的 `provider`、`model`、`api`、`base_url`、`language` 和搜索设置，完整参数见 `config.py`。
 
 凭据默认读取 `~/.hyw-frontier/`，可用 `home` 指定独立目录；也支持 `DEEPSEEK_API_KEY`、`JINA_API_KEY` 等环境变量。`api_key_env` 只填写模型密钥的环境变量名，不填写密钥本身。生产应使用项目外的私有凭据目录，不把真实密钥提交进配置。
 

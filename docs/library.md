@@ -75,31 +75,9 @@ async def main():
 asyncio.run(main())
 ```
 
-`search_provider` 支持 `"parallel"`（默认）、`"jina"` 和 `"ddgs"`。Parallel 的 `search_mode` 可选 `"turbo"`（默认）、`"fast"`、`"basic"`、`"advanced"`；Jina/DDGS 不使用该模式。网页搜索按所选服务执行，默认主链路下所有搜索服务均开放 `search_images`：DDGS 模式使用免密钥的 `ddgs>=9.16,<10` 进行网页和图片搜索，自动选择引擎，每次查询最多10条；其他模式图片搜索使用 `https://svip.jina.ai/` 和原有 Jina 凭据，缺少该凭据时不影响 Parallel 网页搜索。选择 Jina 时网页搜索也使用该 SVIP 端点；Reader 始终使用匿名 Jina 标准接口。图片搜索沿用下述图片下载与审阅预算。
+`search_provider` 支持 `"parallel"`（默认）、`"jina"` 和 `"ddgs"`。Parallel 的 `search_mode` 可选 `"turbo"`（默认）、`"fast"`、`"basic"`、`"advanced"`；Jina/DDGS 不使用该模式。网页搜索按所选服务执行，所有搜索服务均开放 `search_images`：DDGS 模式使用免密钥的 `ddgs>=9.16,<10` 进行网页和图片搜索，自动选择引擎，每次查询最多10条；其他模式图片搜索使用 `https://svip.jina.ai/` 和原有 Jina 凭据，缺少该凭据时不影响 Parallel 网页搜索。选择 Jina 时网页搜索也使用该 SVIP 端点；Reader 始终使用匿名 Jina 标准接口。图片搜索沿用下述图片下载与审阅预算。
 
 DDGS 示例：`await answer("富士山的介绍与图片", search_provider="ddgs")`。无需配置 Jina/Parallel 密钥；需要代理时可设置上游支持的 `DDGS_PROXY`。DDGS 网页工具支持 `location`（映射为地区默认语言区域，省略为 `us-en`）及 `timelimit: d/w/m/y`（一天／一周／一个月／一年），不接受 `after_date`；其他服务仍使用 `after_date`。引擎对地区和时间筛选支持不同，结果需核对来源。搜索成功、空结果及失败均在本任务内缓存，DDGS 自身可能尝试多个引擎，费用记录标为无 API 费用。
-
-### Turbo 快速链路
-
-```python
-result = await answer("你的问题", turbo=True, search_provider="ddgs")
-```
-
-`turbo` 是严格的布尔参数，默认 `False`（主链路），与 Parallel 的 `search_mode="turbo"` **相互独立**，不改变搜索服务、模型、思考强度或轮次预算。`True` 时只开放 `web_search`、`jina_read_url`、`send_process_intro`，关闭 `search_images`、`crop_user_image` 以及工具图片的下载、压缩和审阅。用户原图仍可输入，已有历史不静默删除；Markdown 回答仍可渲染成 PNG，Turbo 不等于强制纯文本回复。
-
-两条链路共用 `hyw_frontier/prompts/system.md`。图片相关段落或行内片段按如下方式标记；自定义 `system_prompt` 也支持：
-
-```markdown
-通用说明。
-<!-- turbo:omit:start -->
-仅主链路使用的图片说明。
-<!-- turbo:omit:end -->
-其他通用说明。
-```
-
-发给模型前，主链路保留标记间正文，Turbo 删除标记间正文；两者均移除所有 HTML 注释。标记不可嵌套，缺少配对或注释未闭合时报错；裁剪后提示词为空也报错，不回退默认提示词。请传原始 Markdown，不要把已去掉标记的主链路提示词再用于 Turbo。
-
-本地页面可选择「回答模式」；HTTP `/api/chat` 接受 `"turbo": true`，缺省为主链路，日志记录该字段。`/api/config` 的 `answer_modes` 展示各链路的工具及处理后提示词。命令行支持 `ask --turbo`、`preview --turbo`、`tools --turbo`。Entari 配置同样支持 `turbo: true`，默认关闭。
 
 `send` 是可选回调参数，默认 `print`。它连接现有的 **`send_process_intro` 工具**，不是绘图进度回调。模型成功调用工具时发送其原话；模型没调用，不会伪造临时消息。最终回复返回给调用方自行发送，不经过 `send`。
 

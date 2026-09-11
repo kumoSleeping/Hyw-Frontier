@@ -107,7 +107,6 @@ class BotTrace:
                 "message": question, "scope": list(scope), "message_id": message_id,
                 "provider": config.provider, "model": config.model, "reasoning": config.reasoning,
                 "search_provider": config.search_provider,
-                "turbo": config.turbo,
                 "search_mode": config.search_mode if config.search_provider == "parallel" else None,
                 "entry": "entari_plugin_hyw_frontier",
             }), max_bytes=config.log_max_bytes)

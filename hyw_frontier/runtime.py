@@ -10,7 +10,6 @@ from threading import Event
 from .credentials import CredentialStore, PROVIDERS
 from .errors import FrontierError
 from .image_input import IMAGE_ONLY_TEXT, validate_images
-from .prompt_modes import render_mode_text
 from .tools import tool_definitions
 
 PACKAGE = Path(__file__).resolve().parent
@@ -20,8 +19,7 @@ DEFAULT_LANGUAGE = "中文"
 DEFAULT_MODEL = "deepseek-flash"
 
 
-def render_prompt(prompt: str, *, language: str = DEFAULT_LANGUAGE, turbo: bool = False) -> str:
-    prompt = render_mode_text(prompt, turbo=turbo)
+def render_prompt(prompt: str, *, language: str = DEFAULT_LANGUAGE) -> str:
     if not isinstance(language, str):
         raise TypeError("language 必须是字符串。")
     language = language.strip()
@@ -35,13 +33,12 @@ def render_prompt(prompt: str, *, language: str = DEFAULT_LANGUAGE, turbo: bool 
             .replace("{{language}}", language))
 
 
-def load_prompt(path: Path = DEFAULT_PROMPT, *, language: str = DEFAULT_LANGUAGE, turbo: bool = False) -> str:
-    return render_prompt(path.read_text(encoding="utf-8"), language=language, turbo=turbo)
+def load_prompt(path: Path = DEFAULT_PROMPT, *, language: str = DEFAULT_LANGUAGE) -> str:
+    return render_prompt(path.read_text(encoding="utf-8"), language=language)
 
 
 def build_context(text: str, system_prompt: str, history: list[dict] | None = None,
-                  *, images: list[dict] | None = None, turbo: bool = False) -> dict:
-    system_prompt = render_mode_text(system_prompt, turbo=turbo)
+                  *, images: list[dict] | None = None) -> dict:
     blocks = validate_images(images if images is not None else [])
     if (not text.strip() and not blocks) or not system_prompt.strip():
         raise FrontierError("消息（文字或图片）和系统提示词不能为空。")
@@ -50,7 +47,7 @@ def build_context(text: str, system_prompt: str, history: list[dict] | None = No
     content = [{"type": "text", "text": text}, *blocks] if blocks else text
     return {"systemPrompt": system_prompt,
             "messages": [*(history or []), {"role": "user", "content": content, "timestamp": int(datetime.now().timestamp() * 1000)}],
-            "tools": tool_definitions(turbo=turbo)}
+            "tools": tool_definitions()}
 
 
 class Bridge:
@@ -131,12 +128,12 @@ class Bridge:
 
     def ask(self, provider: str, model: str, text: str, prompt: Path = DEFAULT_PROMPT,
             *, history: list[dict] | None = None, max_rounds: int = 30, images: list[dict] | None = None,
-            language: str = DEFAULT_LANGUAGE, turbo: bool = False) -> str:
+            language: str = DEFAULT_LANGUAGE) -> str:
         from .agent import AgentLimitError, SearchAgent
-        agent = SearchAgent(self, max_rounds=max_rounds, prefetch_icons=False, turbo=turbo)
+        agent = SearchAgent(self, max_rounds=max_rounds, prefetch_icons=False)
         try:
             result = agent.run(provider, model, build_context(
-                text, load_prompt(prompt, language=language, turbo=turbo), history, images=images, turbo=turbo))
+                text, load_prompt(prompt, language=language), history, images=images))
             return "".join(block["text"] for block in result["content"] if block["type"] == "text")
         except AgentLimitError as exc:
             raise FrontierError(str(exc)) from exc

@@ -66,7 +66,6 @@ async def answer(
     home: Path | None = None,
     search_provider: str = "parallel",
     search_mode: str = "turbo",
-    turbo: bool = False,
     reasoning: dict[str, str] | None = None,
     reasoning_mode: Literal["auto", "high", "medium", "low"] = "auto",
     max_rounds: int = 30,
@@ -96,10 +95,6 @@ async def answer(
     Raw events may contain model text/tool results; the caller owns redaction and retention.
     `language` defaults to "中文" and fills {{language}} in the prompt for final
     answers and process messages. Custom prompts may use the same placeholder.
-    `turbo=True` disables image search, user-image cropping and tool-image processing.
-    Shared prompts use <!-- turbo:omit:start --> / <!-- turbo:omit:end --> to mark
-    main-only sections. All HTML comments are removed in both modes. This flag is
-    independent of Parallel's `search_mode`; default False keeps the main chain.
 
     Rendering uses bundled, offline Noto fonts unless `fonts` is explicitly supplied.
     History is copied; credentials/settings are scoped to `home` (or backend.home).
@@ -141,9 +136,9 @@ async def answer(
             from .model_backend import model_identity
             native_model = model
             provider, model, _ = model_identity(native_model)
-        prompt = (load_prompt(language=language, turbo=turbo) if system_prompt is None
-                  else render_prompt(system_prompt, language=language, turbo=turbo))
-        context = build_context(question, prompt, deepcopy(history), images=images, turbo=turbo)
+        prompt = (load_prompt(language=language) if system_prompt is None
+                  else render_prompt(system_prompt, language=language))
+        context = build_context(question, prompt, deepcopy(history), images=images)
     except BaseException as exc:
         clear_exception_frames(exc)
         history = images = backend = fonts = send = model = native_model = on_event = None
@@ -191,11 +186,10 @@ async def answer(
                 # Also covers ToolRuntime construction failure; close is idempotent.
                 resources.callback(jina.close)
                 with ToolRuntime(jina, search_provider=search_provider,
-                                 search_mode=search_mode, send=send_from_worker, turbo=turbo) as tools:
+                                 search_mode=search_mode, send=send_from_worker) as tools:
                     agent = SearchAgent(bridge, tools, max_rounds=max_rounds, cancel_event=cancelled,
                                         reasoning=reasoning, reasoning_mode=reasoning_mode,
-                                        search_provider=search_provider, search_mode=search_mode,
-                                        turbo=turbo)
+                                        search_provider=search_provider, search_mode=search_mode)
                     resources.callback(agent.release)
                     # Do not force simple caller-owned backends into the streaming protocol.
                     agent.on_event = observe

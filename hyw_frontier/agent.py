@@ -13,7 +13,6 @@ from .image_crop import UserImageCrops
 from .favicons import FaviconPipeline
 from .media import ImagePipeline, MAX_IMAGES, MAX_IMAGES_PER_ROUND
 from .reasoning import RECONSIDER_PROMPT, needs_reconsideration, resolve_reasoning, resolve_reasoning_mode
-from .prompt_modes import render_mode_text
 from .runtime import Bridge, DEFAULT_MODEL
 from .parallel import SEARCH_MODE, SEARCH_MODES
 from .tools import SEARCH_PROVIDER, SEARCH_PROVIDERS, ToolRuntime
@@ -27,12 +26,7 @@ class SearchAgent:
     def __init__(self, bridge, tools: ToolRuntime | None = None, *, max_rounds: int = 30, max_calls: int | None = None,
                  on_event: Callable | None = None, cancel_event: Event | None = None, reasoning: dict[str, str] | None = None,
                  reasoning_mode: str = "auto", search_mode: str = SEARCH_MODE, search_provider: str = SEARCH_PROVIDER,
-                 prefetch_icons: bool = True, turbo: bool = False):
-        if type(turbo) is not bool:
-            raise TypeError("turbo 必须是布尔值。")
-        if tools is not None and tools.turbo != turbo:
-            raise ValueError("SearchAgent 与 ToolRuntime 的 turbo 模式必须一致。")
-        self.turbo = turbo
+                 prefetch_icons: bool = True):
         if type(max_rounds) is not int or max_rounds < 1:
             raise ValueError("Invalid agent budget")
         if max_calls is None:
@@ -46,7 +40,7 @@ class SearchAgent:
         self.bridge = bridge
         self._owns_tools = tools is None
         self.tools = tools if tools is not None else ToolRuntime(
-            JinaClient(bridge.home), search_mode=search_mode, search_provider=search_provider, turbo=turbo)
+            JinaClient(bridge.home), search_mode=search_mode, search_provider=search_provider)
         self.max_rounds, self.max_calls = max_rounds, max_calls
         self.context: dict | None = None
         self.image_assets: dict[str, bytes] = {}
@@ -171,30 +165,29 @@ class SearchAgent:
 
         self.tools.set_reasoning = set_reasoning if reasoning is not None and self.reasoning_mode == "auto" else None
         self.context = deepcopy(context)
-        self.context["systemPrompt"] = render_mode_text(self.context["systemPrompt"], turbo=self.turbo)
         if not self.context["systemPrompt"].strip():
             raise AgentLimitError("系统提示词不能为空。")
         base_prompt = self.context["systemPrompt"]
         self.on_event({"type": "effective_prompt", "system_prompt": base_prompt})
         self._check_cancelled()
-        crops = None if self.turbo else UserImageCrops(self.context["messages"])
+        crops = UserImageCrops(self.context["messages"])
         self._crops = crops
-        self.tools.crop_user_image = crops.crop if crops and crops.originals else None
-        # Runtime definitions own provider/mode-specific descriptions as well as execution.
+        self.tools.crop_user_image = crops.crop if crops.originals else None
+        # Runtime definitions own provider-specific descriptions as well as execution.
         requested = {tool["name"] for tool in self.context["tools"]}
         self.context["tools"] = [tool for tool in self.tools.definitions if tool["name"] in requested
-                                 and (tool["name"] != "crop_user_image" or (crops and crops.originals))
+                                 and (tool["name"] != "crop_user_image" or crops.originals)
                                  and (tool["name"] != "set_reasoning" or self.tools.set_reasoning is not None)]
-        media = None if self.turbo else ImagePipeline(self.context["messages"])
+        media = ImagePipeline(self.context["messages"])
         self._media = media
-        self.image_assets = media.assets if media else {}
-        media_enabled = media is not None and provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp")
+        self.image_assets = media.assets
+        media_enabled = provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp")
         def image_count():
             return sum(block.get("type") == "image" for message in self.context["messages"]
                        if message.get("role") == "toolResult" and message.get("toolName") != "crop_user_image"
                        for block in message.get("content", []))
         previously_sent = image_count()
-        if not self.turbo and previously_sent > MAX_IMAGES:
+        if previously_sent > MAX_IMAGES:
             raise AgentLimitError("历史工具图片超过20张预算，请新建对话；未静默删除历史图片。")
         calls_used = 0
         for _ in range(self.max_rounds):

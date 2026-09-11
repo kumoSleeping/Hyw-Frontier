@@ -99,7 +99,7 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                 if kind == "request":
                     if query.casefold() not in event.get("message", "").casefold():
                         break
-                    summary = {key: event.get(key) for key in ("request_id", "timestamp", "message", "provider", "model", "reasoning", "search_provider", "search_mode", "turbo")}
+                    summary = {key: event.get(key) for key in ("request_id", "timestamp", "message", "provider", "model", "reasoning", "search_provider", "search_mode")}
                     summary.update(file=str(path), status="incomplete", log_truncated=False)
                 if summary is None:
                     continue

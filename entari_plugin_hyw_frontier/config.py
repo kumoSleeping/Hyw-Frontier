@@ -28,7 +28,6 @@ class Config(BasicConfModel):
     reasoning_mode: str = "auto"
     search_provider: str = "jina"
     search_mode: str = "turbo"
-    turbo: bool = False
     max_rounds: int = 30
     request_timeout: float = 90
     timeout: float = 300
@@ -64,8 +63,6 @@ class Config(BasicConfModel):
                      "log_max_files", "log_max_bytes", "log_total_bytes"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be positive")
-        if type(self.turbo) is not bool:
-            raise ValueError("turbo must be a boolean")
         if self.search_provider not in SEARCH_PROVIDERS or self.search_mode not in SEARCH_MODES:
             raise ValueError("Invalid search provider/mode")
         if self.log_max_bytes < 256 * 1024 or self.log_total_bytes < self.log_max_bytes:
@@ -84,7 +81,7 @@ class Config(BasicConfModel):
 
         options = {name: getattr(self, name) for name in (
             "provider", "model", "api", "base_url", "language", "reasoning", "reasoning_mode",
-            "search_provider", "search_mode", "turbo", "max_rounds",
+            "search_provider", "search_mode", "max_rounds",
         )}
         options["timeout"] = self.request_timeout
         if self.home:

@@ -22,8 +22,7 @@ def main() -> int:
     logs.add_argument("--query", default="", help="按用户问题关键词筛选")
     logs.add_argument("--limit", type=int, default=5, help="最近多少次请求，默认5，最大100")
     commands.add_parser("status", help="只显示本项目已保存模型凭据的类型，不显示密钥")
-    tools = commands.add_parser("tools", help="查看项目自定义工具定义；不包含 Browser 或 Pi 工具")
-    tools.add_argument("--turbo", action="store_true", help="只显示快速链路工具")
+    commands.add_parser("tools", help="查看项目自定义工具定义；不包含 Browser 或 Pi 工具")
     tool = commands.add_parser("call-tool", help="直接测试一个项目工具，不调用模型")
     tool.add_argument("name", choices=[item["name"] for item in tool_definitions()])
     tool.add_argument("arguments", help="JSON 参数对象；不要在其中填写密钥")
@@ -42,10 +41,8 @@ def main() -> int:
     ask.add_argument("--base-url", help="显式模型端点；也可通过独立目录 models.json 配置")
     ask.add_argument("--system-prompt", type=Path, default=DEFAULT_PROMPT)
     ask.add_argument("--language", default=DEFAULT_LANGUAGE, help="最终回复和过程回复的语言（默认：中文）")
-    ask.add_argument("--turbo", action="store_true", help="快速链路：关闭图片搜索、裁剪及工具图片审阅")
     ask.add_argument("--max-rounds", type=int, default=30, help="模型轮次安全阈值，正整数，默认30")
     preview = commands.add_parser("preview", help="离线检查应用上下文，不读取凭据、不调用模型")
-    preview.add_argument("--turbo", action="store_true", help="预览快速链路提示词和工具")
     preview.add_argument("text", nargs="?", default="你好")
     preview.add_argument("--system-prompt", type=Path, default=DEFAULT_PROMPT)
     preview.add_argument("--language", default=DEFAULT_LANGUAGE, help="注入提示词的回复语言（默认：中文）")
@@ -63,13 +60,12 @@ def main() -> int:
             serve(args.home, args.port, args.timeout)
             return 0
         if args.command == "preview":
-            result = build_context(args.text, load_prompt(args.system_prompt, language=args.language, turbo=args.turbo),
-                                   turbo=args.turbo)
+            result = build_context(args.text, load_prompt(args.system_prompt, language=args.language))
         elif args.command == "logs":
             from .request_log import log_summaries
             result = log_summaries(Bridge(args.home).home, limit=args.limit, query=args.query)
         elif args.command == "tools":
-            result = tool_definitions(turbo=args.turbo)
+            result = tool_definitions()
         elif args.command == "call-tool":
             bridge = Bridge(args.home, args.timeout)
             result = ToolRuntime(JinaClient(bridge.home)).execute({
@@ -87,7 +83,7 @@ def main() -> int:
                 return 0
             if args.command == "ask":
                 print(bridge.ask(args.provider, args.model, args.text, args.system_prompt,
-                                 max_rounds=args.max_rounds, language=args.language, turbo=args.turbo))
+                                 max_rounds=args.max_rounds, language=args.language))
                 return 0
             request = {"command": args.command}
             if hasattr(args, "provider"):

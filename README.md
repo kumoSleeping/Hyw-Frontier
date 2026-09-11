@@ -39,7 +39,6 @@ def create_answerer(
         on_event=on_event,
         search_provider=search_provider,   # "parallel" / "jina" / "ddgs"
         search_mode="turbo",               # 仅影响 Parallel 搜索
-        turbo=False,                       # True 关闭图片搜索、裁剪与工具图片审阅
         language="中文",
         home=Path.home() / ".hyw-frontier", # 搜索凭据目录；模型凭据由注入实例管理
         fonts=FontSet.bundled(),            # 可换成 FontSet.load(Path("fonts.json"))
@@ -87,7 +86,7 @@ async def main(question: str, image_path: Path | None = None) -> Answer:
 
         # 续接由调用者持有历史；在同一客户端上下文中按需调用：
         # result = await ask("补充说明其中的关键依据", history=result.messages)
-        # partial 的预绑定参数也可按次覆盖：await ask("问题", turbo=True)
+        # partial 的预绑定参数也可按次覆盖：await ask("问题", max_rounds=10)
 
     # 最终回答由调用者投递：纯文本不绘图，Markdown 返回 PNG。
     if result.kind == "image" and result.png is not None:
@@ -123,6 +122,10 @@ Hyw Frontier 是 Python 原生的检索问答核心：负责提示词、模型�
 
 模型接入仅使用 **Pydantic AI Slim 的模型层**，不运行其 Agent 框架；绘图由独立的 **md2png / Pillow** 离线完成，不依赖 Node 或浏览器截图。核心库不持久保存会话，聊天平台由 [Entari 插件](entari_plugin_hyw_frontier/README.md) 接入。本地调试页面使用 `uv run hyw-frontier serve` 启动，地址为 `http://127.0.0.1:8767`。
 
+## 发布约定
+
+本项目中，“推送”默认同时提交并推送到 GitHub 仓库 `kumoSleeping/Hyw-Frontier`，以及部署到 `ssh-ykhm.kumo.ltd` 的生产 Entari 服务，无需再次确认目标。部署须先完成构建与实际功能核验；上线验证失败时回滚，不将失败版本视为发布完成。
+
 ## 修改搜索服务
 
 **切换已有服务不需要改源码。** 修改示例中的 `search_provider`，或在本地网页、Entari 插件配置中选择同名选项：
@@ -133,7 +136,7 @@ Hyw Frontier 是 Python 原生的检索问答核心：负责提示词、模型�
 | `jina` | Jina SVIP | Jina SVIP | `JINA_API_KEY` |
 | `ddgs` | DDGS | DDGS | 无需搜索 API Key |
 
-`search_mode` 仅对 Parallel 生效，可选 `turbo`、`fast`、`basic`、`advanced`；与关闭图片链路的 `turbo=True` 无关。无论选择哪个搜索服务，网页读取工具 `jina_read_url` 仍使用匿名 Jina Reader。
+`search_mode` 仅对 Parallel 生效，可选 `turbo`、`fast`、`basic`、`advanced`。无论选择哪个搜索服务，网页读取工具 `jina_read_url` 仍使用匿名 Jina Reader。
 
 密钥放在环境变量，或 `home` 目录中的 `parallel.json` / `jina.json`（字段为 `api_key`），不要写入源码或 README。搜索凭据与模型凭据相互独立。
 

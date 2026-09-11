@@ -55,10 +55,10 @@ def model_messages(context: dict):
     prompt = context.get("systemPrompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise FrontierError("系统提示词不能为空。")
-    # Accept only an exact subset of one project-owned provider/mode registry.
-    # Provider-specific parameters and Turbo descriptions intentionally differ.
-    registries = [{t["name"]: t for t in tool_definitions(provider, turbo=turbo)}
-                  for provider in (None, *SEARCH_PROVIDERS) for turbo in (False, True)]
+    # Accept only an exact subset of one project-owned provider registry.
+    # Provider-specific parameters intentionally differ.
+    registries = [{t["name"]: t for t in tool_definitions(provider)}
+                  for provider in (None, *SEARCH_PROVIDERS)]
     definitions = context.get("tools", [])
     if (len({t.get("name") for t in definitions}) != len(definitions)
             or not any(all(registry.get(t.get("name")) == t for t in definitions)

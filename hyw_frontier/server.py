@@ -43,7 +43,6 @@ class Session:
     touched: float = field(default_factory=time.monotonic)
     turns: int = 0
     system_prompt: str = field(default_factory=load_prompt)
-    turbo_system_prompt: str = field(default_factory=lambda: load_prompt(turbo=True))
 
 
 class App:
@@ -102,13 +101,7 @@ class App:
             parallel_configured = False
         return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL, "providers": list(PROVIDERS),
                 "language": DEFAULT_LANGUAGE, "media": MEDIA_CONFIG,
-                "turbo": False,
                 "development": {"auto_reload": os.environ.get("HYW_FRONTIER_RELOAD") == "1", "pid": os.getpid()},
-                "answer_modes": {
-                    "default": {"turbo": False, "tools": [tool["name"] for tool in tool_definitions()],
-                                "system_prompt": load_prompt(), "tool_images": True, "user_image_crop": True},
-                    "turbo": {"turbo": True, "tools": [tool["name"] for tool in tool_definitions(turbo=True)],
-                              "system_prompt": load_prompt(turbo=True), "tool_images": False, "user_image_crop": False}},
                 "search": {"provider": SEARCH_PROVIDER, "providers": list(SEARCH_PROVIDERS),
                            "mode": SEARCH_MODE, "modes": list(SEARCH_MODES),
                            "ddgs": DDGS_SEARCH_CONFIG},
@@ -291,9 +284,6 @@ class Handler(BaseHTTPRequestHandler):
         rounds = data.get("max_rounds", 30)
         search_mode = data.get("search_mode", SEARCH_MODE)
         search_provider = data.get("search_provider", SEARCH_PROVIDER)
-        turbo = data.get("turbo", False)
-        if type(turbo) is not bool:
-            raise ValueError("turbo must be a boolean")
         if (not isinstance(text, str) or (not text.strip() and not images) or len(text) > 6000 or provider not in PROVIDERS
                 or not isinstance(model, str) or not 1 <= len(model) <= 150 or type(rounds) is not int or rounds < 1):
             raise ValueError("Invalid chat request")
@@ -317,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
         agent = None
         trace = RequestLog(self.server.app.home, {"message": text, "provider": provider, "model": model,
                                                  "reasoning": reasoning, "reasoning_mode": reasoning_mode,
-                                                 "search_provider": search_provider, "turbo": turbo,
+                                                 "search_provider": search_provider,
                                                  "images": [{"mimeType": image["mimeType"], "base64_length": len(image["data"])} for image in images],
                                                  "search_mode": effective_search_mode, "max_rounds": rounds})
 
@@ -347,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise AgentLimitError("本测试会话已达20轮，请新建对话；不会自动压缩或删除上下文。")
             send({"type": "start", "provider": provider, "model": model, "reasoning": reasoning,
                   "reasoning_mode": reasoning_mode,
-                  "search_provider": search_provider, "search_mode": effective_search_mode, "turbo": turbo})
+                  "search_provider": search_provider, "search_mode": effective_search_mode})
             # Lazily construct the configured native Model on the task's own loop.
             # The instance then uses the same settings-preserving adapter as answer(model=...).
             from .credentials import CredentialStore
@@ -361,10 +351,10 @@ class Handler(BaseHTTPRequestHandler):
             agent = self.server.app.agent_factory(bridge, on_event=send, cancel_event=session.cancel,
                                                   max_rounds=rounds, reasoning=reasoning, reasoning_mode=reasoning_mode,
                                                   search_mode=search_mode,
-                                                  search_provider=search_provider, turbo=turbo)
-            prompt = session.turbo_system_prompt if turbo else session.system_prompt
+                                                  search_provider=search_provider)
+            prompt = session.system_prompt
             trace.write({"type": "prompt", "system_prompt": prompt})
-            context = build_context(text, prompt, session.history, images=images, turbo=turbo)
+            context = build_context(text, prompt, session.history, images=images)
             if len(json.dumps(context["messages"]).encode()) > MAX_HISTORY:
                 raise AgentLimitError("会话上下文超过32MB测试上限，请新建对话；未自动压缩内容。")
             response = agent.run(provider, model, context)
@@ -386,7 +376,7 @@ class Handler(BaseHTTPRequestHandler):
                 send({"type": "render_start", "engine": RENDER_ENGINE})
                 try:
                     card = self.server.app.renderer.render(answer, metadata={"date": date.today().isoformat(),
-                        "search_provider": search_provider, "search_mode": effective_search_mode, "turbo": turbo,
+                        "search_provider": search_provider, "search_mode": effective_search_mode,
                         "answer_ms": round((render_started - started) * 1000),
                         "source_titles": source_titles(history),
                         "truncated": response.get("stopReason") == "length"}, cancel=session.cancel,

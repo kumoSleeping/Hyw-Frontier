@@ -45,7 +45,7 @@ function status(text, error = false) {
 
 function setBusy(value) {
   busy = value;
-  for (const id of ["provider", "model", "rounds", "answer-mode", "search-provider", "search-mode", "new-chat", "message", "send"]) {
+  for (const id of ["provider", "model", "rounds", "search-provider", "search-mode", "new-chat", "message", "send"]) {
     $(id).disabled = value || !initialized;
   }
   imageInput.setDisabled(value || !initialized);
@@ -87,7 +87,6 @@ async function submit(event) {
   document.querySelector("main").classList.add("has-result");
   const request = {
     session, message: text, images, provider: $("provider").value, model: $("model").value.trim(), max_rounds: maxRounds,
-    turbo: $("answer-mode").value === "turbo",
     ...reasoningControl.requestSettings(), ...searchControl.requestSettings(),
   };
   const inspection = createInspection($("debug"), null, () => {
@@ -195,14 +194,7 @@ window.addEventListener("pagehide", () => { imageResult.clear(); imageInput.clea
     });
     searchControl = createSearchProviderControl({ select: $("search-provider"), modeSelect: $("search-mode"),
       hint: $("search-hint"), config: config.search, storage });
-    const updateAnswerMode = () => {
-      const mode = $("answer-mode").value;
-      $("prompt").textContent = config.answer_modes[mode].system_prompt;
-      for (const row of document.querySelectorAll("[data-main-only]")) row.hidden = mode === "turbo";
-    };
-    $("answer-mode").value = config.turbo ? "turbo" : "default";
-    $("answer-mode").addEventListener("change", updateAnswerMode);
-    updateAnswerMode();
+    $("prompt").textContent = config.system_prompt;
     $("credentials").textContent = `DeepSeek ${config.credentials.deepseek ? "已配置" : "未配置"} / Jina ${config.credentials.jina ? "已配置" : "未配置"} / Parallel ${config.credentials.parallel ? "已配置" : "未配置"} / DDGS 无需密钥`;
     await newChat();
     initialized = true; setBusy(false); $("message").focus();

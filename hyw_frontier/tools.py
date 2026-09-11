@@ -13,45 +13,38 @@ from jsonschema import Draft202012Validator, FormatChecker
 from .ddgs import DDGSClient
 from .jina import JinaClient, JinaError
 from .parallel import ParallelClient, SEARCH_MODE
-from .prompt_modes import render_mode_text
 
 SEARCH_PROVIDER = "parallel"
 SEARCH_PROVIDERS = ("jina", "parallel", "ddgs")
 # Temporarily disabled; keep the schema and implementation available for restoration.
 DISABLED_TOOLS = frozenset({"fill_thinking"})
-TURBO_DISABLED_TOOLS = frozenset({"search_images", "crop_user_image"})
 TOOL_FILE = Path(__file__).with_name("tools.json")
 _REGISTRY = json.loads(TOOL_FILE.read_text(encoding="utf-8"))
 
-def _provider_definition(value, provider, turbo):
+def _provider_definition(value, provider):
     """Strip registry metadata and omit unsupported parameters/instructions."""
     if isinstance(value, list):
-        return [_provider_definition(item, provider, turbo) for item in value]
-    if isinstance(value, str):
-        return render_mode_text(value, turbo=turbo)
+        return [_provider_definition(item, provider) for item in value]
     if not isinstance(value, dict):
         return value
-    return {key: _provider_definition(item, provider, turbo) for key, item in value.items()
+    return {key: _provider_definition(item, provider) for key, item in value.items()
             if key != "search_providers"
             and not (isinstance(item, dict) and provider is not None
                      and provider not in item.get("search_providers", SEARCH_PROVIDERS))}
 
 
-def tool_definitions(search_provider: str | None = None, *, turbo: bool = False) -> list[dict]:
-    if type(turbo) is not bool:
-        raise TypeError("turbo 必须是布尔值。")
+def tool_definitions(search_provider: str | None = None) -> list[dict]:
     if search_provider is not None and search_provider not in SEARCH_PROVIDERS:
         raise ValueError("Unsupported search provider")
-    return [_provider_definition(tool, search_provider, turbo) for tool in _REGISTRY
+    return [_provider_definition(tool, search_provider) for tool in _REGISTRY
             if tool["name"] not in DISABLED_TOOLS
-            and (not turbo or tool["name"] not in TURBO_DISABLED_TOOLS)
             and (search_provider is None or search_provider in tool.get("search_providers", SEARCH_PROVIDERS))]
 
 
 class ToolRuntime:
     def __init__(self, jina: JinaClient, search: ParallelClient | JinaClient | DDGSClient | None = None, *,
                  search_mode: str = SEARCH_MODE, search_provider: str = SEARCH_PROVIDER,
-                 send: Callable[[str], None] | None = None, turbo: bool = False):
+                 send: Callable[[str], None] | None = None):
         if search_provider not in SEARCH_PROVIDERS:
             raise ValueError("Unsupported search provider")
         if send is not None and not callable(send):
@@ -61,8 +54,7 @@ class ToolRuntime:
         self.crop_user_image: Callable[[str, list[int]], tuple[dict, list[dict]]] | None = None
         self.jina = jina
         self.search_provider = search_provider
-        self.definitions = tool_definitions(search_provider, turbo=turbo)
-        self.turbo = turbo
+        self.definitions = tool_definitions(search_provider)
         self._validators = {tool["name"]: Draft202012Validator(tool["parameters"], format_checker=FormatChecker())
                             for tool in self.definitions}
         if search is not None:
