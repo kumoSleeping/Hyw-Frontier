@@ -14,6 +14,7 @@ import time
 from urllib.parse import urlsplit
 
 from .agent import AgentLimitError, SearchAgent
+from .credentials import CredentialStore
 from .ddgs import SEARCH_CONFIG as DDGS_SEARCH_CONFIG
 from .image_input import IMAGE_INPUT_CONFIG, ImageInputError, validate_images
 from .image_crop import CROP_CONFIG
@@ -100,6 +101,7 @@ class App:
         except JinaError:
             parallel_configured = False
         return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL, "providers": list(PROVIDERS),
+                "provider_presets": CredentialStore(self.home).provider_presets(),
                 "language": DEFAULT_LANGUAGE, "media": MEDIA_CONFIG,
                 "development": {"auto_reload": os.environ.get("HYW_FRONTIER_RELOAD") == "1", "pid": os.getpid()},
                 "search": {"provider": SEARCH_PROVIDER, "providers": list(SEARCH_PROVIDERS),
@@ -116,7 +118,7 @@ class App:
                                          "clients_by_provider": {"jina": "urllib3", "parallel": "urllib3", "ddgs": "primp"}},
                               "model": {"library": "pydantic-ai-slim", "runtime": "python", "input": "model_instance",
                                         "scope": "task", "automatic_retries": False,
-                                        "output_limit_policy": "model_maximum",
+                                        "output_limit_policy": "configured_deployment_budget_or_model_maximum",
                                         "max_output_tokens": known_output_limit(DEFAULT_PROVIDER, DEFAULT_MODEL)},
                               "deepseek": {"mode": "python_async_client", "api": "responses",
                                            "credential_scope": "task_snapshot"}},

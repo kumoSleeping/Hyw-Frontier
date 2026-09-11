@@ -27,6 +27,7 @@ class ModelConnection:
     api: str
     base_url: str | None
     api_key: str = field(repr=False)
+    max_output_tokens: int | None = None
 
 
 class CredentialStore:
@@ -112,13 +113,30 @@ class CredentialStore:
             self._save(data)
         return {"provider": provider, "loggedOut": True}
 
+    def model_config(self, provider: str) -> dict:
+        config = self._load("models.json").get(provider, {})
+        allowed = {"api", "base_url", "api_key_env", "model", "label", "max_output_tokens"}
+        if not isinstance(config, dict) or set(config) - allowed:
+            raise FrontierError("models.json 提供商设置仅支持 api、base_url、api_key_env、model、label、max_output_tokens。")
+        for name, maximum in (("model", 150), ("label", 100)):
+            value = config.get(name)
+            if name in config and (not isinstance(value, str) or not value.strip() or len(value) > maximum):
+                raise FrontierError(f"models.json 的 {name} 必须是1–{maximum}字符的字符串。")
+        limit = config.get("max_output_tokens")
+        if "max_output_tokens" in config and (type(limit) is not int or limit < 1):
+            raise FrontierError("max_output_tokens 必须是正整数（部署的输出预算，不是上下文长度）。")
+        return config
+
+    def provider_presets(self) -> dict:
+        # Only expose presentation fields, never endpoint credentials or environment names.
+        return {provider: {key: value for key, value in self.model_config(provider).items()
+                           if key in ("model", "label")} for provider in PROVIDERS}
+
     def connection(self, provider: str, *, api=None, base_url=None, api_key=None) -> ModelConnection:
         if provider not in PROVIDERS:
             raise FrontierError("不支持该提供商；旧 openai-codex OAuth 不再用于模型请求，请配置 API Key。")
         default_api, default_url, key_env = _DEFAULTS[provider]
-        config = self._load("models.json").get(provider, {})
-        if not isinstance(config, dict) or set(config) - {"api", "base_url", "api_key_env"}:
-            raise FrontierError("models.json 提供商设置仅支持 api、base_url、api_key_env。")
+        config = self.model_config(provider)
         api = api if api is not None else config.get("api", default_api)
         base_url = base_url if base_url is not None else config.get("base_url", default_url)
         if api not in ("responses", "chat", "anthropic", "google"):
@@ -155,4 +173,4 @@ class CredentialStore:
         if not isinstance(key, str) or not key.strip():
             raise FrontierError(f"未配置 {provider} API Key 凭据；请设置 {key_env} 或运行 login。",
                                 diagnostics={"code": "credentials_missing", "retryable": False})
-        return ModelConnection(provider, api, base_url, key.strip())
+        return ModelConnection(provider, api, base_url, key.strip(), config.get("max_output_tokens"))

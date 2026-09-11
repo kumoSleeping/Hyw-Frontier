@@ -182,7 +182,10 @@ window.addEventListener("pagehide", () => { imageResult.clear(); imageInput.clea
     const config = await response.json();
     imageInput.configure(config.image_input);
     for (const provider of config.providers) {
-      const option = document.createElement("option"); option.value = provider; option.textContent = provider;
+      const preset = config.provider_presets?.[provider];
+      if (preset?.model) defaults[provider] = preset.model;
+      const option = document.createElement("option"); option.value = provider;
+      option.textContent = preset?.label || provider;
       $("provider").append(option);
     }
     $("provider").value = config.provider; $("model").value = config.model;

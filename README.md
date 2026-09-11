@@ -116,6 +116,33 @@ if __name__ == "__main__":
 
 也可以不注入实例，直接向 `answer()` 传入模型 ID 和连接参数；更底层的模型传输可通过 `backend` 注入。完整参数、返回字段及生命周期约定见 [库接口文档](docs/library.md)。
 
+## 本地 MLX 模型（调试页面可选）
+
+Apple Silicon 上可用独立的 `mlx-vlm` 服务提供 OpenAI Chat Completions API，不需要把 MLX 安装进本项目环境。在模型目录运行：
+
+```bash
+.venv/bin/python -m mlx_vlm.server --host 127.0.0.1 --port 8768 \
+  --model ./4bit --max-tokens 1024 --prefill-step-size 256 --vision-cache-size 2
+```
+
+在 `~/.hyw-frontier/models.json`（或 `HYW_FRONTIER_HOME` 下同名文件）中合并以下提供商配置，不覆盖其他条目：
+
+```json
+{
+  "openai-compatible": {
+    "api": "chat",
+    "base_url": "http://127.0.0.1:8768/v1",
+    "model": "./4bit",
+    "label": "本地 Qwen · MLX 4-bit（支持图片）",
+    "max_output_tokens": 1024
+  }
+}
+```
+
+本机未开启 API 认证时，设置 `OPENAI_COMPATIBLE_API_KEY=local-mlx`，或用 `login openai-compatible api_key` 保存该占位字符串（非真实密钥）。重启调试服务并刷新页面，在提供商菜单选择本地选项，模型 ID 自动填入；DeepSeek 仍是默认选项。`model`、`label` 仅为页面预设，命令行及库调用仍显式指定模型 ID。
+
+`max_output_tokens` 是**显式的部署输出预算**，优先于模型元数据；1024 并非模型理论最大输出能力。未配置时仍自动解析模型输出容量。16GB Mac 建议先用短对话和单张小图；本地模型 API 不联网，但 Frontier 的搜索与网页读取工具仍会联网。MLX 的 `--max-tokens` 是未指定请求额度时的默认值，并非全局硬上限。不要将无认证服务绑定到公网地址。
+
 ## 项目定义
 
 Hyw Frontier 是 Python 原生的检索问答核心：负责提示词、模型工具循环、网页搜索与读取、图片审阅，以及最终回答的文本或 PNG 输出。

@@ -1,4 +1,4 @@
-"""Resolve output capacity, never substitute the context window or a local token budget."""
+"""Resolve output capacity or an explicitly configured deployment output budget."""
 from __future__ import annotations
 
 import time
@@ -34,6 +34,9 @@ async def resolve_output_limit(connection, client, model: str) -> int:
     Catalog requests carry no credentials, prompts or requested model ID. Cache only public
     metadata, not SDK clients/tasks, so independent event loops can safely reuse the result.
     """
+    if connection.max_output_tokens is not None:
+        # Explicit deployment budget takes precedence; never infer it from context size.
+        return connection.max_output_tokens
     limit = known_output_limit(connection.provider, model)
     if limit is not None:
         return limit
