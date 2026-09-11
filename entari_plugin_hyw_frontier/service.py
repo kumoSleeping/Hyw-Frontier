@@ -148,6 +148,7 @@ class FrontierService:
         started = time.monotonic()
         trace = BotTrace(self.config, question, key, session.event.message.id)
         status = "error"
+        phase = "answer"
 
         async def send_intro(text: str):
             trace.event({"type": "intro_callback_start", "text": text})
@@ -197,15 +198,10 @@ class FrontierService:
                     except Exception as exc:  # noqa: BLE001 - adapter-independent delivery boundary
                         trace.event({"type": "image_delivery_failed", "phase": phase, "error_type": type(exc).__name__})
                         logger.warning("Frontier request {} image delivery failed ({})", trace.id, type(exc).__name__)
-                        # A failed/expired acknowledgement cannot retract an adapter's
-                        # upload. Never resend the answer: the image may still arrive.
-                        notice = ("图片发送结果未确认，图片仍可能送达；本轮不会自动补发文字版。"
-                                  if phase == "image_delivery" else "图片编码失败，本轮未发送回答。")
-                        try:
-                            await self.send(session, notice)
-                        except Exception as delivery:  # noqa: BLE001 - no further automatic resend
-                            logger.warning("Frontier image failure notice failed ({})", type(delivery).__name__)
+                        # The adapter may still deliver the image. Diagnostics stay in
+                        # logs: no answer resend and no chat notice of any kind.
                         return
+                phase = "delivered"
                 # Only successful final delivery updates /link; history is never retained.
                 self.remember_sources(key, receipts, sources)
                 if result.truncated:
@@ -222,8 +218,11 @@ class FrontierService:
             # Never expose SDK messages/URLs/keys or traceback locals in a group chat.
             details = {key: exc.diagnostics[key] for key in ("code", "http_status", "retryable")
                        if key in exc.diagnostics} if isinstance(exc, FrontierError) else {}
-            trace.event({"type": "request_failed", "error_type": type(exc).__name__, **details})
+            trace.event({"type": "request_failed", "phase": phase, "error_type": type(exc).__name__, **details})
             logger.warning("Frontier request {} failed ({}) after {:.1f}s", trace.id, type(exc).__name__, time.monotonic() - started)
+            if phase in ("jpeg_encoding", "image_delivery"):
+                # Also silence the outer request deadline expiring during image delivery.
+                return
             if isinstance(exc, TimeoutError):
                 message = "本轮已超时并回收资源，其他问题不受影响。"
             else:
