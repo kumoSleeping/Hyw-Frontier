@@ -17,7 +17,7 @@ from hyw_frontier.source_titles import source_key, source_titles
 
 from .attachments import prepare_images
 from .config import Config
-from .delivery import outgoing_jpeg, readable_url
+from .delivery import outgoing_jpeg
 from .trace import BotTrace
 
 Scope = tuple[str, str, str, str, str]
@@ -114,7 +114,9 @@ class FrontierService:
         else:
             record = self.latest_sources.get(key)
         sources = record.sources if record else ()
-        text = "\n\n".join(f"{i}. {title}\n{readable_url(url)}" for i, (title, url) in enumerate(sources, 1))
+        # Percent-encoded URLs stay encoded: chat clients linkify them as-is, while a
+        # decoded Unicode path may not be recognized as a clickable address.
+        text = "\n\n".join(f"{i}. {title}\n{url}" for i, (title, url) in enumerate(sources, 1))
         await self.send_chunks(session, text or "这条回答没有引用来源链接。")
 
     async def send_chunks(self, session, text: str):

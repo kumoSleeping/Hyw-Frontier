@@ -90,15 +90,9 @@ def adapt_answer(parsed: dict, metadata: dict, limits: Limits, *, reading: bool 
 
     blocks = []
     for part in parsed['parts']:
-        if parsed['mode'] == 'text':
-            spans = []
-            for i, line in enumerate(part['text'].split('\n')):
-                if i:
-                    spans.append(Inline(kind='break'))
-                spans.append(Inline(line))
-            children = (Block('', 'paragraph', inlines=tuple(spans), language='literal'),)
-        else:
-            children = parse(part['text'], limits, soft_breaks=True).children
+        # Text mode is still authored Markdown: parsing keeps `[label](url)` links whole and
+        # still records bare URLs, instead of matching a URL across the rest of the line.
+        children = parse(part['text'], limits, soft_breaks=True).children
         if part['kind'] == 'summary':
             children = (Block('', 'summary', children=children),)
         blocks.extend(unique(b) for b in children)
