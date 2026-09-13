@@ -59,7 +59,7 @@ class ParsedMessage:
         remaining = MAX_MESSAGE_BYTES - 4096 - self.text_bytes
         if len(raw) > remaining:
             value = raw[:max(0, remaining)].decode("utf-8", errors="ignore")
-            self.stop("聊天记录文本达到128 MiB上限")
+            self.stop("聊天记录文本达到256 MiB上限")
         if value:
             self.parts.append(MessagePart("text", value))
             self.text_bytes += len(value.encode("utf-8"))

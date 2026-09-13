@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlsplit
 from PIL import Image, ImageOps
 
 from .jina import JinaError, public_url
+from .media_fetch import MAX_BYTES as MAX_DOWNLOAD_BYTES
 
 MAX_IMAGES = 600
 MAX_IMAGES_PER_ROUND = 10
@@ -35,7 +36,7 @@ MAX_JPEG_BYTES = 256 * 1024
 MAX_EDGE = 1280
 MAX_PIXELS = 25_000_000
 MEDIA_CONFIG = {'enabled': True, 'max_images': MAX_IMAGES, 'max_images_per_round': MAX_IMAGES_PER_ROUND,
-                'download_timeout_seconds': DOWNLOAD_TIMEOUT,
+                'download_timeout_seconds': DOWNLOAD_TIMEOUT, 'max_download_bytes': MAX_DOWNLOAD_BYTES,
                 'concurrency': DOWNLOAD_CONCURRENCY, 'format': 'image/jpeg', 'max_edge': MAX_EDGE,
                 'jpeg_quality': 75, 'max_image_bytes': MAX_JPEG_BYTES,
                 'discovery': 'search_images_and_reader_image_links', 'compression': 'in_memory',

@@ -10,7 +10,7 @@ import ssl
 import sys
 from urllib.parse import urljoin, urlsplit
 
-MAX_BYTES = 4 * 1024 * 1024
+MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_TIMEOUT = 2.5
 
 

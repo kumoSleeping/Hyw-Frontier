@@ -12,7 +12,7 @@ MIME_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP", 
 MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 10 * 1024 * 1024
-MAX_MESSAGE_BYTES = 128 * 1024 * 1024
+MAX_MESSAGE_BYTES = 256 * 1024 * 1024
 MAX_MESSAGE_BLOCKS = 32768
 IMAGE_ONLY_TEXT = "[用户发送了这张图，请探究根据这张图，给出一份符合系统提示词所需求的的文章]"
 IMAGE_INPUT_CONFIG = {"enabled": True, "paste_only": True, "mime_types": list(MIME_FORMATS),
@@ -24,7 +24,11 @@ class ImageInputError(ValueError):
     pass
 
 
-def validate_images(images) -> list[dict]:
+def validate_images(images, *, max_image_bytes: int = MAX_IMAGE_BYTES,
+                    max_total_bytes: int = MAX_TOTAL_BYTES) -> list[dict]:
+    if (type(max_image_bytes) is not int or max_image_bytes < 1
+            or type(max_total_bytes) is not int or max_total_bytes < 1):
+        raise ValueError('Image byte limits must be positive integers')
     if not isinstance(images, list) or len(images) > MAX_IMAGES:
         raise ImageInputError("每次最多粘贴4张图片。")
     result = []
@@ -34,15 +38,15 @@ def validate_images(images) -> list[dict]:
                 or item["mimeType"] not in MIME_FORMATS):
             raise ImageInputError("图片仅支持 PNG、JPEG、WebP、GIF。")
         data = item.get("data")
-        if not isinstance(data, str) or not data or len(data) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
-            raise ImageInputError("图片为空或超过单张5MB上限。")
+        if not isinstance(data, str) or not data or len(data) > 4 * ((max_image_bytes + 2) // 3):
+            raise ImageInputError(f"图片为空或超过单张{max_image_bytes // (1024 * 1024)} MiB上限。")
         try:
             raw = base64.b64decode(data, validate=True)
         except (ValueError, binascii.Error) as exc:
             raise ImageInputError("图片编码无效。") from exc
         total += len(raw)
-        if len(raw) > MAX_IMAGE_BYTES or total > MAX_TOTAL_BYTES:
-            raise ImageInputError("图片超过单张5MB或合计10MB上限。")
+        if len(raw) > max_image_bytes or total > max_total_bytes:
+            raise ImageInputError(f"图片超过单张{max_image_bytes // (1024 * 1024)} MiB或合计{max_total_bytes // (1024 * 1024)} MiB上限。")
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -80,6 +84,6 @@ def validate_message_content(content) -> list[dict]:
         else:
             raise ImageInputError("结构化消息仅支持文字和图片。")
         if total > MAX_MESSAGE_BYTES:
-            raise ImageInputError("结构化消息超过128 MiB上限，请按原顺序截断后提交。")
+            raise ImageInputError("结构化消息超过256 MiB上限，请按原顺序截断后提交。")
         result.append(clean)
     return result

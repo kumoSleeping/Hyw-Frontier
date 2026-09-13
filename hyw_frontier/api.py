@@ -120,7 +120,7 @@ async def answer(
     `max_tool_images` defaults to 600; non-negative integer, 0 disables new tool
     images. History tool images count toward this budget; user/record images do not.
     `message_content` is an ordered list of text/image blocks for parsed chat records
-    or cards, mutually exclusive with `images`. Maximum 128 MiB including question
+    or cards, mutually exclusive with `images`. Maximum 256 MiB including question
     text and decoded image bytes; callers truncate before submitting. Ordinary
     `images` retains its four-image limit. Provider context/payload limits still apply.
     `links` reuses the renderer's ordered, deduplicated HTTP(S) reference list.

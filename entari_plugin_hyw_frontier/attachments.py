@@ -6,10 +6,10 @@ from threading import Event
 
 from arclet.entari import Image, MessageChain
 
-from hyw_frontier.image_input import ImageInputError, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_MESSAGE_BYTES, validate_images
+from hyw_frontier.image_input import ImageInputError, MAX_IMAGES, MAX_MESSAGE_BYTES, validate_images
 
 from .message_parser import ParsedMessage
-from hyw_frontier.media import Candidate, compress, download
+from hyw_frontier.media import Candidate, MAX_DOWNLOAD_BYTES, compress, download
 
 # Chat CDNs are slower than search thumbnails; keep the same bounded worker, longer budget.
 ATTACHMENT_DOWNLOAD_TIMEOUT = 15.0
@@ -30,10 +30,11 @@ def _prepare(sources: list[str], cancelled: Event) -> list[dict]:
             break
         if source.startswith("data:"):
             header, sep, data = source.partition(",")
-            if not sep or not header.endswith(";base64") or len(data) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
-                raise AttachmentError("attachment_invalid_encoding", "图片编码无效或超过5MB，请重新上传。")
+            if not sep or not header.endswith(";base64") or len(data) > 4 * ((MAX_DOWNLOAD_BYTES + 2) // 3):
+                raise AttachmentError("attachment_invalid_encoding", "图片编码无效或超过20 MiB，请重新上传。")
             mime = header[5:-7]
-            validate_images([{"mimeType": mime, "data": data}])
+            validate_images([{"mimeType": mime, "data": data}],
+                            max_image_bytes=MAX_DOWNLOAD_BYTES, max_total_bytes=MAX_DOWNLOAD_BYTES)
             raw = base64.b64decode(data, validate=True)
         elif source.startswith(("https://", "http://")) and len(source) <= 8192:
             _, raw, status, _ = download(Candidate(source, source, "用户附件", 0), cancelled,
@@ -107,7 +108,7 @@ async def prepare_components(parsed: ParsedMessage, question: str) -> PreparedCo
         raw = text.encode("utf-8")
         if size + len(raw) > budget:
             text = raw[:max(0, budget - size)].decode("utf-8", errors="ignore")
-            reason = "压缩图片和文本合计达到128 MiB上限"
+            reason = "压缩图片和文本合计达到256 MiB上限"
             if text:
                 content.append({"type": "text", "text": text})
                 size += len(text.encode("utf-8"))
@@ -150,7 +151,7 @@ async def prepare_components(parsed: ParsedMessage, question: str) -> PreparedCo
             raw_size = len(base64.b64decode(block["data"], validate=True))
             required = len(marker.encode("utf-8")) + raw_size
             if size + required > budget:
-                reason = "压缩图片和文本合计达到128 MiB上限"
+                reason = "压缩图片和文本合计达到256 MiB上限"
                 break
             content.extend([{"type": "text", "text": marker}, block])
             size += required

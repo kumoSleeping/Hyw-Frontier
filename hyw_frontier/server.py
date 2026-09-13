@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from .agent import AgentLimitError, SearchAgent
 from .credentials import CredentialStore
 from .ddgs import SEARCH_CONFIG as DDGS_SEARCH_CONFIG
-from .image_input import IMAGE_INPUT_CONFIG, ImageInputError, validate_images
+from .image_input import IMAGE_INPUT_CONFIG, MAX_MESSAGE_BYTES, MAX_MESSAGE_BLOCKS, ImageInputError, validate_images
 from .image_crop import CROP_CONFIG
 from .jina import SEARCH_ENDPOINT as JINA_SEARCH_ENDPOINT, JinaError, load_jina_key
 from .media import MEDIA_CONFIG, MAX_IMAGES
@@ -103,6 +103,7 @@ class App:
         return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL, "providers": list(PROVIDERS),
                 "provider_presets": CredentialStore(self.home).provider_presets(),
                 "language": DEFAULT_LANGUAGE, "media": MEDIA_CONFIG,
+                "message_input": {"max_total_bytes": MAX_MESSAGE_BYTES, "max_blocks": MAX_MESSAGE_BLOCKS},
                 "development": {"auto_reload": os.environ.get("HYW_FRONTIER_RELOAD") == "1", "pid": os.getpid()},
                 "search": {"provider": SEARCH_PROVIDER, "providers": list(SEARCH_PROVIDERS),
                            "mode": SEARCH_MODE, "modes": list(SEARCH_MODES),
