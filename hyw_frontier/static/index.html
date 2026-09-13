@@ -18,14 +18,6 @@
       <h2>模型配置</h2>
       <label for="provider">提供商</label><select id="provider" disabled></select>
       <label for="model">模型 ID</label><input id="model" spellcheck="false" autocomplete="off" value="deepseek-flash" maxlength="150">
-      <label for="reasoning-mode">思考等级</label><select id="reasoning-mode" aria-describedby="reasoning-hint" disabled>
-        <option value="auto">自动思考等级（默认）</option>
-        <option value="high">固定高档</option><option value="medium">固定中档</option><option value="low">固定低档</option>
-      </select>
-      <label for="reasoning-high">高档思考 → 模型强度</label><select id="reasoning-high" aria-describedby="reasoning-hint" disabled></select>
-      <label for="reasoning-medium">中档思考（默认）→ 模型强度</label><select id="reasoning-medium" aria-describedby="reasoning-hint" disabled></select>
-      <label for="reasoning-low">低档思考 → 模型强度</label><select id="reasoning-low" aria-describedby="reasoning-hint" disabled></select>
-      <p id="reasoning-hint" class="hint">正在加载…</p>
       <label for="rounds">模型轮次安全阈值</label><input id="rounds" type="number" min="1" step="1" value="30" inputmode="numeric" aria-describedby="rounds-hint">
       <p id="rounds-hint" class="hint">默认30，可输入更大的正整数。</p>
       <label for="search-provider">搜索服务</label><select id="search-provider" disabled></select>
@@ -39,7 +31,6 @@
       <p>用户图片裁剪（有用户原图时启用）<code>crop_user_image</code></p>
       <p>标准网页读取 <code>jina_read_url</code></p>
       <p>发送过程介绍 <code>send_process_intro</code></p>
-      <p>动态思考切换（支持的模型）<code>set_reasoning</code></p>
       <p class="hint">网页读取使用匿名免费额度，仅限用户提供链接或明确必须阅读指定文章的需求。回答图片由本机 Pillow 离线绘制，不启动浏览器。</p>
     </section>
     <details class="prompt-panel"><summary>查看当前系统提示词</summary><pre id="prompt">加载中…</pre></details>
@@ -55,7 +46,7 @@
         <div class="actions"><button id="stop" type="button" hidden>停止</button><button id="send" type="submit" disabled>发送</button></div>
       </form>
       <p id="activity" role="status" aria-live="polite"></p>
-      <p id="search-progress" role="status" aria-live="polite" aria-label="轮次耗时与图片预算" title="按轮统计总耗时、模型耗时和工具耗时；图片压缩归入模型耗时，上传包含在模型调用内，媒体下载归入工具耗时并单列。并发耗时按阶段实际经过时间统计，不逐项相加。图片显示每次模型请求携带的工具图片数，每轮新增处理最多5张、总共20张不同图片，重放历史不占新增额度且不重复下载。" hidden></p>
+      <p id="search-progress" role="status" aria-live="polite" aria-label="轮次耗时与图片预算" title="按轮统计总耗时、模型耗时和工具耗时；图片压缩归入模型耗时，上传包含在模型调用内，媒体下载归入工具耗时并单列。并发耗时按阶段实际经过时间统计，不逐项相加。图片显示每次模型请求携带的工具图片数，每轮新增处理最多10张、默认总共600张不同工具图片（可通过 max_tool_images 参数配置），重放历史不占新增额度且不重复下载。" hidden></p>
       <p id="process-intro" role="status" aria-live="polite" aria-label="过程介绍" hidden></p>
       <div id="result" aria-label="当前回答图片" hidden></div>
       <section id="debug" aria-label="完整调试输出"></section>

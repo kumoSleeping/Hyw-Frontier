@@ -12,6 +12,8 @@ MIME_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP", 
 MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 10 * 1024 * 1024
+MAX_MESSAGE_BYTES = 128 * 1024 * 1024
+MAX_MESSAGE_BLOCKS = 32768
 IMAGE_ONLY_TEXT = "[用户发送了这张图，请探究根据这张图，给出一份符合系统提示词所需求的的文章]"
 IMAGE_INPUT_CONFIG = {"enabled": True, "paste_only": True, "mime_types": list(MIME_FORMATS),
                       "max_images": MAX_IMAGES, "max_image_bytes": MAX_IMAGE_BYTES,
@@ -53,4 +55,31 @@ def validate_images(images) -> list[dict]:
         except (OSError, ValueError, SyntaxError) as exc:
             raise ImageInputError("图片损坏或格式不匹配。") from exc
         result.append({"type": "image", "mimeType": item["mimeType"], "data": data})
+    return result
+
+
+def validate_message_content(content) -> list[dict]:
+    """Explicit rich-input boundary; does not relax the ordinary four-image API.
+
+    Count UTF-8 text and decoded image bytes, not Base64 transport overhead.
+    Rebuild blocks so chat-supplied internal metadata cannot bypass validation.
+    """
+    if not isinstance(content, list) or len(content) > MAX_MESSAGE_BLOCKS:
+        raise ImageInputError("结构化消息内容块超过安全上限。")
+    result = []
+    total = 0
+    for block in content:
+        if not isinstance(block, dict):
+            raise ImageInputError("结构化消息内容块无效。")
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            clean = {"type": "text", "text": block["text"]}
+            total += len(clean["text"].encode("utf-8"))
+        elif block.get("type") == "image":
+            clean = validate_images([block])[0]
+            total += len(base64.b64decode(clean["data"], validate=True))
+        else:
+            raise ImageInputError("结构化消息仅支持文字和图片。")
+        if total > MAX_MESSAGE_BYTES:
+            raise ImageInputError("结构化消息超过128 MiB上限，请按原顺序截断后提交。")
+        result.append(clean)
     return result

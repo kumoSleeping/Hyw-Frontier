@@ -1,5 +1,5 @@
 "use strict";
-import { createReasoningControl, createSearchProviderControl } from "./settings.js";
+import { createSearchProviderControl } from "./settings.js";
 import { createImageResult } from "./image-result.js";
 import { createImageInput } from "./image-input.js";
 import { createProcessIntro } from "./process-intro.js";
@@ -20,7 +20,6 @@ const searchProgress = createSearchProgress($("search-progress"));
 let session = null;
 let busy = false;
 let initialized = false;
-let reasoningControl = null;
 let searchControl = null;
 const imageInput = createImageInput({
   input: $("message"), preview: $("image-input"), onError: message => status(message, true),
@@ -50,7 +49,6 @@ function setBusy(value) {
   }
   imageInput.setDisabled(value || !initialized);
   $("send").disabled = value || !initialized || imageInput.loading;
-  reasoningControl?.update(value || !initialized);
   searchControl?.update(value || !initialized);
   $("stop").hidden = !value;
   $("stop").disabled = false;
@@ -87,7 +85,7 @@ async function submit(event) {
   document.querySelector("main").classList.add("has-result");
   const request = {
     session, message: text, images, provider: $("provider").value, model: $("model").value.trim(), max_rounds: maxRounds,
-    ...reasoningControl.requestSettings(), ...searchControl.requestSettings(),
+    ...searchControl.requestSettings(),
   };
   const inspection = createInspection($("debug"), null, () => {
     inspection.body.scrollTop = inspection.body.scrollHeight;
@@ -164,9 +162,7 @@ $("message").addEventListener("keydown", (event) => {
 $("new-chat").addEventListener("click", () => newChat().catch(error => status(error.message, true)));
 $("provider").addEventListener("change", () => {
   $("model").value = defaults[$("provider").value] || "";
-  reasoningControl?.update(busy || !initialized);
 });
-$("model").addEventListener("input", () => reasoningControl?.update(busy || !initialized));
 $("stop").addEventListener("click", async () => {
   $("stop").disabled = true; $("stop").textContent = "停止中…";
   status("正在停止…");
@@ -190,11 +186,6 @@ window.addEventListener("pagehide", () => { imageResult.clear(); imageInput.clea
     }
     $("provider").value = config.provider; $("model").value = config.model;
     const storage = { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) };
-    reasoningControl = createReasoningControl({
-      modeSelect: $("reasoning-mode"),
-      selects: { high: $("reasoning-high"), medium: $("reasoning-medium"), low: $("reasoning-low") },
-      hint: $("reasoning-hint"), provider: $("provider"), model: $("model"), config: config.reasoning, storage,
-    });
     searchControl = createSearchProviderControl({ select: $("search-provider"), modeSelect: $("search-mode"),
       hint: $("search-hint"), config: config.search, storage });
     $("prompt").textContent = config.system_prompt;

@@ -70,8 +70,10 @@ class UserImageCrops:
         self.originals = [block for block in message["content"]
                           if block.get("type") == "image" and "_crop_source" not in block]
         unprepared = [block for block in self.originals if "_user_image" not in block]
-        if unprepared:
-            validate_images(unprepared)
+        # The rich-input boundary owns aggregate limits; do not reapply the
+        # ordinary four-upload limit to parsed chat-record images here.
+        for block in unprepared:
+            validate_images([block])
         content = []
         for block in message["content"]:
             if block.get("type") != "image" or "_crop_source" in block or "_user_image" in block:

@@ -106,7 +106,7 @@ class BotTrace:
             self.log = RequestLog(home, redact({
                 "message": question, "scope": list(scope), "message_id": message_id,
                 "provider": config.provider, "model": config.model, "reasoning": config.reasoning,
-                "search_provider": config.search_provider,
+                "search_provider": config.search_provider, "max_tool_images": config.max_tool_images,
                 "search_mode": config.search_mode if config.search_provider == "parallel" else None,
                 "entry": "entari_plugin_hyw_frontier",
             }), max_bytes=config.log_max_bytes)
@@ -134,7 +134,8 @@ class BotTrace:
             return
         with self.lock:
             if kind == "request_failed":
-                self.failure = {key: event[key] for key in ("error_type", "code", "http_status", "retryable") if key in event}
+                self.failure = {key: event[key] for key in
+                                ("error_type", "code", "http_status", "retryable", "phase", "message") if key in event}
             elif kind == "model_response":
                 self.counts["model_rounds"] += 1
                 for block in event.get("response", {}).get("content", []):

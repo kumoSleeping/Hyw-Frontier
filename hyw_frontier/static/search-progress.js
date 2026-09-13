@@ -7,8 +7,8 @@ export function createSearchProgress(container) {
   let detailed = false;
   let sent = 0;
   let prepared = 0;
-  let budget = 20;
-  let roundBudget = 5;
+  let budget = 600;
+  let roundBudget = 10;
   function render() {
     const entries = [...rounds.entries()].sort(([a], [b]) => a - b);
     container.hidden = entries.length === 0;
@@ -26,11 +26,11 @@ export function createSearchProgress(container) {
         .join("\n");
   }
   return {
-    clear() { rounds.clear(); seenQueries.clear(); detailed = false; sent = 0; prepared = 0; budget = 20; roundBudget = 5; render(); },
+    clear() { rounds.clear(); seenQueries.clear(); detailed = false; sent = 0; prepared = 0; budget = 600; roundBudget = 10; render(); },
     accept(event) {
       if (!["model_start", "query_start", "round_timing", "media_download_end", "media_end"].includes(event.type)) return;
       if (!Number.isSafeInteger(event.round) || event.round < 1) return;
-      if (Number.isSafeInteger(event.image_budget) && event.image_budget > 0) budget = event.image_budget;
+      if (Number.isSafeInteger(event.image_budget) && event.image_budget >= 0) budget = event.image_budget;
       if (Number.isSafeInteger(event.image_round_budget) && event.image_round_budget > 0) roundBudget = event.image_round_budget;
       if (event.type === "query_start") {
         if (!["web_search", "search_images"].includes(event.name) || typeof event.id !== "string"

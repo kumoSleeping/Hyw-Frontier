@@ -3,8 +3,6 @@ from arclet.alconna import Alconna, AllParam, Args, Arparma
 from arclet.entari import (
     At,
     Cleanup,
-    Element,
-    Image,
     MessageChain,
     MessageCreatedEvent,
     Quote,
@@ -46,24 +44,6 @@ def leading_content(content: MessageChain) -> MessageChain:
     return result
 
 
-def quoted_elements(session: Session[MessageCreatedEvent]) -> list[Element]:
-    """Content of the replied-to message; the adapter may or may not inline it."""
-    quote = session.event.quote
-    elements = list(quote.children) if quote is not None else []
-    if not elements and session.reply is not None:
-        elements = list(session.reply.origin.message)
-    return elements
-
-
-def quoted_images(session: Session[MessageCreatedEvent]) -> list[Image]:
-    return [element for element in quoted_elements(session) if isinstance(element, Image)]
-
-
-def quoted_text(session: Session[MessageCreatedEvent]) -> str:
-    """Plain text of the replied-to message; authors, images and other blocks are skipped."""
-    return MessageChain(quoted_elements(session)).extract_plain_text().strip()
-
-
 @listen(CommandReceive)
 async def strip_leading_mentions(content: MessageChain):
     cleaned = leading_content(content)
@@ -81,17 +61,10 @@ async def ask(session: Session[MessageCreatedEvent], result: Arparma):
         return
     raw = result.all_matched_args.get("content")
     chain = raw if isinstance(raw, MessageChain) else MessageChain(raw or [])
-    if not chain.get(Image):
-        # entari strips the leading quote from command content, and OneBot carries the
-        # replied-to image inside that quote, so read it back from the event itself.
-        chain = MessageChain([*chain, *quoted_images(session)])
     question = chain.extract_plain_text().strip()
     if question.lower() in ("reset", "clear", "重置", "清空"):
         await service.reset(session, key)
         return
-    quoted = quoted_text(session)
-    if quoted:
-        question = f"被回复消息：\n{quoted}\n\n用户当前请求：\n{question or '请结合上面的消息回答。'}"
     await service.submit(session, key, question, chain)
 
 
@@ -124,7 +97,8 @@ async def help_command(session: Session[MessageCreatedEvent]):
         f"{conf.stop_command}：停止本人在当前频道的所有任务，等待资源收尾。",
         f"/link（或 {conf.link_command}）：回复一条回答获取其来源标题＋链接；不引用则取本人最近一次回答。",
         f"每个 Q 独立执行，同一人也可并发；全局最多 {conf.max_concurrent} 个任务，满额拒绝、不排队。",
-        "不保存对话历史；回复消息仅携带该条消息的文字和图片，不自动恢复完整对话；不监听普通聊天。",
+        "支持引用分享卡片、小程序、音乐和合并转发：提取文字、链接、封面及内部图片，按原顺序绑定；压缩后合计128 MiB，超出截断。",
+        "仅 /q 触发解析；不执行小程序、不播放音视频、不自动读取链接正文，不恢复群聊上下文或监听普通聊天。",
         "来源链接按机器人/频道/成员隔离，仅存内存；重启或过期后失效。",
     ]))
 

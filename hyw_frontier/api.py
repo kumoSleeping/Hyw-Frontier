@@ -21,6 +21,7 @@ from .agent import SearchAgent
 from .cleanup import clear_exception_frames
 from .costs import Costs, model_items, summarize
 from .jina import JinaClient
+from .media import MAX_IMAGES
 from .rendering import CardRenderer
 from .render_protocol import answer_text, parse_answer
 from .runtime import Bridge, DEFAULT_LANGUAGE, DEFAULT_MODEL, DEFAULT_PROVIDER, build_context, load_prompt, render_prompt
@@ -69,10 +70,12 @@ async def answer(
     reasoning: dict[str, str] | None = None,
     reasoning_mode: Literal["auto", "high", "medium", "low"] = "auto",
     max_rounds: int = 30,
+    max_tool_images: int = MAX_IMAGES,
     timeout: float = 300,
     system_prompt: str | None = None,
     history: list[dict] | None = None,
     images: list[dict] | None = None,
+    message_content: list[dict] | None = None,
     fonts: FontSet | None = None,
     backend: ModelBackend | None = None,
 ) -> Answer:
@@ -105,15 +108,21 @@ async def answer(
     `base_url` and `api_key` override project-local connection settings.
     A native Pydantic AI `Model` instance may replace the model ID. Its provider and
     settings are authoritative; do not also pass provider/api/base_url/api_key/backend.
-    `reasoning` optionally opts into dynamic effort: exactly high/medium/low keys, each
+    `reasoning` optionally selects effort: exactly high/medium/low keys, each
     mapped to off/low/high/max (duplicates allowed), for verified DeepSeek models.
-    `reasoning_mode='auto'` starts each question at medium; set_reasoning affects
-    subsequent model rounds. high/medium/low instead locks that tier and omits the tool.
+    Dynamic switching is temporarily disabled. `reasoning_mode='auto'` keeps medium
+    throughout each question; high/medium/low locks the corresponding tier.
     Model IDs use the project mapping by default; native Models keep their own settings
     when reasoning is omitted. Explicit mappings override only request-local effort.
     Its requests run on this caller's event loop. Its client lifecycle remains caller-owned;
     timeout/cancellation stop and join this invocation, not other users of that client.
     `home` still controls search credentials for this form.
+    `max_tool_images` defaults to 600; non-negative integer, 0 disables new tool
+    images. History tool images count toward this budget; user/record images do not.
+    `message_content` is an ordered list of text/image blocks for parsed chat records
+    or cards, mutually exclusive with `images`. Maximum 128 MiB including question
+    text and decoded image bytes; callers truncate before submitting. Ordinary
+    `images` retains its four-image limit. Provider context/payload limits still apply.
     `links` reuses the renderer's ordered, deduplicated HTTP(S) reference list.
     `costs` covers only this invocation, not history; missing charges remain None.
     SDK catalog estimates are separate from actual USD charges.
@@ -122,6 +131,8 @@ async def answer(
         raise TypeError("send must be callable")
     if on_event is not None and (not callable(on_event) or inspect.iscoroutinefunction(on_event)):
         raise TypeError("on_event must be a synchronous, thread-safe callback")
+    if type(max_tool_images) is not int or max_tool_images < 0:
+        raise ValueError('max_tool_images must be a non-negative integer')
     if timeout <= 0:
         raise ValueError("timeout must be positive")
     if backend is not None and any(value is not None for value in (home, api, base_url, api_key)):
@@ -138,10 +149,10 @@ async def answer(
             provider, model, _ = model_identity(native_model)
         prompt = (load_prompt(language=language) if system_prompt is None
                   else render_prompt(system_prompt, language=language))
-        context = build_context(question, prompt, deepcopy(history), images=images)
+        context = build_context(question, prompt, deepcopy(history), images=images, message_content=message_content)
     except BaseException as exc:
         clear_exception_frames(exc)
-        history = images = backend = fonts = send = model = native_model = on_event = None
+        history = images = message_content = backend = fonts = send = model = native_model = on_event = None
         raise
     loop = asyncio.get_running_loop()
     cancelled = Event()
@@ -187,7 +198,7 @@ async def answer(
                 resources.callback(jina.close)
                 with ToolRuntime(jina, search_provider=search_provider,
                                  search_mode=search_mode, send=send_from_worker) as tools:
-                    agent = SearchAgent(bridge, tools, max_rounds=max_rounds, cancel_event=cancelled,
+                    agent = SearchAgent(bridge, tools, max_rounds=max_rounds, max_tool_images=max_tool_images, cancel_event=cancelled,
                                         reasoning=reasoning, reasoning_mode=reasoning_mode,
                                         search_provider=search_provider, search_mode=search_mode)
                     resources.callback(agent.release)
@@ -220,7 +231,7 @@ async def answer(
                 resources.callback(renderer.close)
                 card = renderer.render(text, metadata={"truncated": truncated,
                                                       "source_titles": source_titles(agent.context["messages"])},
-                                       cancel=cancelled,
+                                       cancel=cancelled, max_tool_images=max_tool_images,
                                        font_set=fonts or FontSet.bundled(),
                                        **({'image_assets': agent.image_assets} if agent.image_assets else {}),
                                        **({'favicon_assets': agent.favicon_assets} if agent.favicon_assets else {}))
@@ -261,5 +272,5 @@ async def answer(
         raise
     finally:
         context.clear()
-        history = images = backend = fonts = send = task = model = native_model = None
+        history = images = message_content = backend = fonts = send = task = model = native_model = None
         question = system_prompt = prompt = api_key = on_event = None

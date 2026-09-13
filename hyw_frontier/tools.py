@@ -17,7 +17,7 @@ from .parallel import ParallelClient, SEARCH_MODE
 SEARCH_PROVIDER = "parallel"
 SEARCH_PROVIDERS = ("jina", "parallel", "ddgs")
 # Temporarily disabled; keep the schema and implementation available for restoration.
-DISABLED_TOOLS = frozenset({"fill_thinking"})
+DISABLED_TOOLS = frozenset({"fill_thinking", "set_reasoning"})
 TOOL_FILE = Path(__file__).with_name("tools.json")
 _REGISTRY = json.loads(TOOL_FILE.read_text(encoding="utf-8"))
 

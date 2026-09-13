@@ -19,7 +19,7 @@ from .ddgs import SEARCH_CONFIG as DDGS_SEARCH_CONFIG
 from .image_input import IMAGE_INPUT_CONFIG, ImageInputError, validate_images
 from .image_crop import CROP_CONFIG
 from .jina import SEARCH_ENDPOINT as JINA_SEARCH_ENDPOINT, JinaError, load_jina_key
-from .media import MEDIA_CONFIG
+from .media import MEDIA_CONFIG, MAX_IMAGES
 from .model_limits import known_output_limit
 from .favicons import FAVICON_CONFIG
 from .parallel import load_parallel_key, SEARCH_MODE, SEARCH_MODES
@@ -284,6 +284,9 @@ class Handler(BaseHTTPRequestHandler):
         text, provider, model = data.get("message"), data.get("provider", DEFAULT_PROVIDER), data.get("model", DEFAULT_MODEL)
         images = validate_images(data.get("images", []))
         rounds = data.get("max_rounds", 30)
+        max_tool_images = data.get("max_tool_images", MAX_IMAGES)
+        if type(max_tool_images) is not int or max_tool_images < 0:
+            raise ValueError('max_tool_images must be a non-negative integer')
         search_mode = data.get("search_mode", SEARCH_MODE)
         search_provider = data.get("search_provider", SEARCH_PROVIDER)
         if (not isinstance(text, str) or (not text.strip() and not images) or len(text) > 6000 or provider not in PROVIDERS
@@ -311,7 +314,8 @@ class Handler(BaseHTTPRequestHandler):
                                                  "reasoning": reasoning, "reasoning_mode": reasoning_mode,
                                                  "search_provider": search_provider,
                                                  "images": [{"mimeType": image["mimeType"], "base64_length": len(image["data"])} for image in images],
-                                                 "search_mode": effective_search_mode, "max_rounds": rounds})
+                                                 "search_mode": effective_search_mode, "max_rounds": rounds,
+                                                 "max_tool_images": max_tool_images})
 
         def send(event):
             nonlocal sequence
@@ -351,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
                 return configured_model(connection, name, timeout, reasoning[initial_level] if reasoning is not None else None)
             bridge = Bridge(home, timeout, session.cancel, model_factory=model_factory)
             agent = self.server.app.agent_factory(bridge, on_event=send, cancel_event=session.cancel,
-                                                  max_rounds=rounds, reasoning=reasoning, reasoning_mode=reasoning_mode,
+                                                  max_rounds=rounds, max_tool_images=max_tool_images, reasoning=reasoning, reasoning_mode=reasoning_mode,
                                                   search_mode=search_mode,
                                                   search_provider=search_provider)
             prompt = session.system_prompt
@@ -382,6 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                         "answer_ms": round((render_started - started) * 1000),
                         "source_titles": source_titles(history),
                         "truncated": response.get("stopReason") == "length"}, cancel=session.cancel,
+                        max_tool_images=max_tool_images,
                         **({'image_assets': agent.image_assets} if getattr(agent, 'image_assets', None) else {}),
                         **({'favicon_assets': agent.favicon_assets} if getattr(agent, 'favicon_assets', None) else {}))
                     if session.cancel.is_set():

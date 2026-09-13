@@ -15,7 +15,7 @@ from .media import ImagePipeline, MAX_IMAGES, MAX_IMAGES_PER_ROUND
 from .reasoning import RECONSIDER_PROMPT, needs_reconsideration, resolve_reasoning, resolve_reasoning_mode
 from .runtime import Bridge, DEFAULT_MODEL
 from .parallel import SEARCH_MODE, SEARCH_MODES
-from .tools import SEARCH_PROVIDER, SEARCH_PROVIDERS, ToolRuntime
+from .tools import DISABLED_TOOLS, SEARCH_PROVIDER, SEARCH_PROVIDERS, ToolRuntime
 
 
 class AgentLimitError(RuntimeError):
@@ -26,9 +26,12 @@ class SearchAgent:
     def __init__(self, bridge, tools: ToolRuntime | None = None, *, max_rounds: int = 30, max_calls: int | None = None,
                  on_event: Callable | None = None, cancel_event: Event | None = None, reasoning: dict[str, str] | None = None,
                  reasoning_mode: str = "auto", search_mode: str = SEARCH_MODE, search_provider: str = SEARCH_PROVIDER,
-                 prefetch_icons: bool = True):
+                 prefetch_icons: bool = True, max_tool_images: int = MAX_IMAGES):
         if type(max_rounds) is not int or max_rounds < 1:
             raise ValueError("Invalid agent budget")
+        if type(max_tool_images) is not int or max_tool_images < 0:
+            raise ValueError('max_tool_images must be a non-negative integer')
+        self.max_tool_images = max_tool_images
         if max_calls is None:
             max_calls = max_rounds * 8  # No hidden 24-call cap before the user-selected round budget.
         if type(max_calls) is not int or max_calls < 1:
@@ -163,11 +166,16 @@ class SearchAgent:
             settings.update(reasoning=reasoning[level], reasoning_level=level)
             return {"ok": True, "level": level, "reasoning": reasoning[level], "effective": "next_round"}
 
-        self.tools.set_reasoning = set_reasoning if reasoning is not None and self.reasoning_mode == "auto" else None
+        switching_enabled = "set_reasoning" not in DISABLED_TOOLS
+        self.tools.set_reasoning = (set_reasoning if switching_enabled and reasoning is not None
+                                    and self.reasoning_mode == "auto" else None)
         self.context = deepcopy(context)
         if not self.context["systemPrompt"].strip():
             raise AgentLimitError("系统提示词不能为空。")
-        base_prompt = self.context["systemPrompt"]
+        base_prompt = (self.context["systemPrompt"] +
+                       f'\n\n本次工具图片预算：每轮最多{MAX_IMAGES_PER_ROUND}张，总共最多{self.max_tool_images}张；'
+                       '仅约束搜索/Reader 图片，不计用户附件和聊天记录图片。')
+        self.context["systemPrompt"] = base_prompt
         self.on_event({"type": "effective_prompt", "system_prompt": base_prompt})
         self._check_cancelled()
         crops = UserImageCrops(self.context["messages"])
@@ -178,7 +186,7 @@ class SearchAgent:
         self.context["tools"] = [tool for tool in self.tools.definitions if tool["name"] in requested
                                  and (tool["name"] != "crop_user_image" or crops.originals)
                                  and (tool["name"] != "set_reasoning" or self.tools.set_reasoning is not None)]
-        media = ImagePipeline(self.context["messages"])
+        media = ImagePipeline(self.context["messages"], max_images=self.max_tool_images)
         self._media = media
         self.image_assets = media.assets
         media_enabled = provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp")
@@ -187,8 +195,8 @@ class SearchAgent:
                        if message.get("role") == "toolResult" and message.get("toolName") != "crop_user_image"
                        for block in message.get("content", []))
         previously_sent = image_count()
-        if previously_sent > MAX_IMAGES:
-            raise AgentLimitError("历史工具图片超过20张预算，请新建对话；未静默删除历史图片。")
+        if previously_sent > self.max_tool_images:
+            raise AgentLimitError(f"历史工具图片超过{self.max_tool_images}张预算，请调大 max_tool_images 或新建对话；未静默删除历史图片。")
         calls_used = 0
         for _ in range(self.max_rounds):
             self._check_cancelled()
@@ -197,7 +205,7 @@ class SearchAgent:
                                   "level": settings.get("reasoning_level"), "effort": settings.get("reasoning")}
             previous = next((message for message in reversed(self.context["messages"])
                              if message.get("role") == "assistant"), None)
-            reconsider = needs_reconsideration(previous, provider, model, reasoning_settings)
+            reconsider = switching_enabled and needs_reconsideration(previous, provider, model, reasoning_settings)
             # Only the first request after a change gets the reminder; never rewrite
             # the shared/session prompt or accumulate it in conversation messages.
             prompt = f"{base_prompt}\n\n{RECONSIDER_PROMPT}" if reconsider else base_prompt
@@ -214,13 +222,13 @@ class SearchAgent:
                 self.on_event({"type": "round_timing", "round": round_number, "phase": phase,
                                "complete": complete, "total_ms": round((time.monotonic() - started) * 1000, 2),
                                **{key: round(value, 2) for key, value in times.items()},
-                               "images_sent": images_sent, "image_budget": MAX_IMAGES,
+                               "images_sent": images_sent, "image_budget": self.max_tool_images,
                                "image_round_budget": MAX_IMAGES_PER_ROUND})
             try:
                 self.on_event({"type": "model_start", "round": round_number, **settings,
                                "reasoning_reconsider": reconsider,
                                "images_sent": images_sent, "new_images_sent": images_sent - previously_sent,
-                               "image_budget": MAX_IMAGES, "image_round_budget": MAX_IMAGES_PER_ROUND})
+                               "image_budget": self.max_tool_images, "image_round_budget": MAX_IMAGES_PER_ROUND})
                 previously_sent = images_sent
                 request = {"command": "stream" if self.streaming else "complete",
                            "provider": provider, "model": model, "context": self.context, **settings}

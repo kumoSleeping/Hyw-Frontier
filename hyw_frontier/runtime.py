@@ -9,7 +9,8 @@ from threading import Event
 
 from .credentials import CredentialStore, PROVIDERS
 from .errors import FrontierError
-from .image_input import IMAGE_ONLY_TEXT, validate_images
+from .image_input import IMAGE_ONLY_TEXT, validate_images, validate_message_content
+from .media import MAX_IMAGES
 from .tools import tool_definitions
 
 PACKAGE = Path(__file__).resolve().parent
@@ -38,13 +39,21 @@ def load_prompt(path: Path = DEFAULT_PROMPT, *, language: str = DEFAULT_LANGUAGE
 
 
 def build_context(text: str, system_prompt: str, history: list[dict] | None = None,
-                  *, images: list[dict] | None = None) -> dict:
-    blocks = validate_images(images if images is not None else [])
+                  *, images: list[dict] | None = None, message_content: list[dict] | None = None) -> dict:
+    if message_content is not None and images is not None:
+        raise ValueError('Choose images or ordered message_content, not both')
+    blocks = (validate_message_content(message_content) if message_content is not None
+              else validate_images(images if images is not None else []))
     if (not text.strip() and not blocks) or not system_prompt.strip():
         raise FrontierError("消息（文字或图片）和系统提示词不能为空。")
     if not text.strip():
         text = IMAGE_ONLY_TEXT
-    content = [{"type": "text", "text": text}, *blocks] if blocks else text
+    if message_content is not None:
+        # Source material precedes the current request; interleaved image bindings survive.
+        suffix = {"type": "text", "text": "\n【用户当前请求】\n" + text}
+        content = validate_message_content([*blocks, suffix])
+    else:
+        content = [{"type": "text", "text": text}, *blocks] if blocks else text
     return {"systemPrompt": system_prompt,
             "messages": [*(history or []), {"role": "user", "content": content, "timestamp": int(datetime.now().timestamp() * 1000)}],
             "tools": tool_definitions()}
@@ -128,9 +137,9 @@ class Bridge:
 
     def ask(self, provider: str, model: str, text: str, prompt: Path = DEFAULT_PROMPT,
             *, history: list[dict] | None = None, max_rounds: int = 30, images: list[dict] | None = None,
-            language: str = DEFAULT_LANGUAGE) -> str:
+            language: str = DEFAULT_LANGUAGE, max_tool_images: int = MAX_IMAGES) -> str:
         from .agent import AgentLimitError, SearchAgent
-        agent = SearchAgent(self, max_rounds=max_rounds, prefetch_icons=False)
+        agent = SearchAgent(self, max_rounds=max_rounds, max_tool_images=max_tool_images, prefetch_icons=False)
         try:
             result = agent.run(provider, model, build_context(
                 text, load_prompt(prompt, language=language), history, images=images))

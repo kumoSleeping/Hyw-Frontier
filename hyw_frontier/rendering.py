@@ -233,8 +233,8 @@ class CardRenderer:
 
     def render(self, answer: str, *, metadata: dict, cancel: Event,
                font_set: FontSet | None = None, image_assets: dict[str, bytes] | None = None,
-               favicon_assets: dict[str, bytes] | None = None) -> RenderedCard:
-        from .media import MAX_IMAGES, MAX_JPEG_BYTES
+               favicon_assets: dict[str, bytes] | None = None, max_tool_images: int = 600) -> RenderedCard:
+        from .media import MAX_JPEG_BYTES
         from .favicon_assets import MAX_ICONS, MAX_ICON_BYTES
         from md2png.hyw.document import source_origin
         favicon_assets = favicon_assets or {}
@@ -243,7 +243,8 @@ class CardRenderer:
                 or len(raw) > MAX_ICON_BYTES for origin, raw in favicon_assets.items())):
             raise RenderError('answer_too_large')
         image_assets = image_assets or {}
-        if (len(image_assets) > MAX_IMAGES or any(not isinstance(url, str) or not isinstance(raw, bytes)
+        if (type(max_tool_images) is not int or max_tool_images < 0
+                or len(image_assets) > max_tool_images or any(not isinstance(url, str) or not isinstance(raw, bytes)
                 or len(raw) > MAX_JPEG_BYTES for url, raw in image_assets.items())):
             raise RenderError('answer_too_large')
         if len(answer.encode()) > 256 * 1024:
@@ -266,6 +267,7 @@ class CardRenderer:
                 payload = work / 'input.json'
                 payload.write_text(json.dumps({'answer': answer, 'metadata': metadata,
                     'font_set': asdict(font_set) if font_set else None,
+                    'max_tool_images': max_tool_images,
                     'image_assets': {url: base64.b64encode(raw).decode('ascii') for url, raw in image_assets.items()},
                     'favicon_assets': {origin: base64.b64encode(raw).decode('ascii')
                                        for origin, raw in favicon_assets.items()}},

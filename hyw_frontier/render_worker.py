@@ -68,7 +68,9 @@ def render(work: Path, runtime: RenderRuntime | None = None) -> dict:
         from .media import MAX_IMAGES, MAX_JPEG_BYTES, MAX_EDGE
         from PIL import Image
         encoded_assets = data.get('image_assets', {})
-        if not isinstance(encoded_assets, dict) or len(encoded_assets) > MAX_IMAGES:
+        max_tool_images = data.get('max_tool_images', MAX_IMAGES)
+        if (type(max_tool_images) is not int or max_tool_images < 0
+                or not isinstance(encoded_assets, dict) or len(encoded_assets) > max_tool_images):
             raise RenderError('answer_too_large')
         image_assets = {}
         for url, encoded in encoded_assets.items():

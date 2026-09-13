@@ -13,9 +13,12 @@ from loguru import logger
 
 from hyw_frontier import answer
 from hyw_frontier.errors import FrontierError
+from hyw_frontier.image_input import ImageInputError
+from hyw_frontier.jina import JinaError
 from hyw_frontier.source_titles import source_key, source_titles
 
-from .attachments import prepare_images
+from .attachments import prepare_components
+from .message_parser import parse_input
 from .config import Config
 from .delivery import outgoing_jpeg
 from .trace import BotTrace
@@ -150,7 +153,7 @@ class FrontierService:
         started = time.monotonic()
         trace = BotTrace(self.config, question, key, session.event.message.id)
         status = "error"
-        phase = "answer"
+        phase = "attachments"
 
         async def send_intro(text: str):
             trace.event({"type": "intro_callback_start", "text": text})
@@ -163,24 +166,33 @@ class FrontierService:
 
         try:
             async with asyncio.timeout(self.config.timeout):
-                images = await prepare_images(chain)
-                trace.event({"type": "input_ready", "images": len(images), "history_messages": 0})
-                if not question and not images:
+                parsed = await parse_input(session, chain)
+                if not question and not parsed.parts:
                     await self.send(session, f"请输入问题：{self.config.command} <问题>；帮助：{self.config.help_command}")
                     status = "done"
                     return
+                question = question or '请结合提供的消息、组件和图片回答。'
+                prepared = await prepare_components(parsed, question)
+                trace.event({"type": "input_ready", "images": prepared.images, "history_messages": 0,
+                             "record_messages": parsed.message_count, "input_bytes": prepared.byte_count,
+                             "failed_images": prepared.failed_images, "input_truncated": prepared.truncated,
+                             "truncation_reason": prepared.truncation_reason,
+                             "parsed_text": ''.join(block['text'] for block in prepared.content if block['type'] == 'text')})
+                phase = "answer"
                 result = await answer(
                     question,
-                    images=images,
+                    message_content=prepared.content,
                     send=send_intro,
                     on_event=trace.event,
                     **self.config.answer_options(),
                 )
+                phase = "result_processing"
                 titles = source_titles(result.messages)
                 sources = tuple((titles.get(source_key(url)) or urlsplit(url).hostname or url, url)
                                 for url in result.links)
                 receipts = []
                 if result.kind == 'text':
+                    phase = "text_delivery"
                     trace.event({"type": "text_delivery_start", "characters": len(result.display_text)})
                     receipts = await self.send_chunks(session, result.display_text)
                     trace.event({"type": "text_delivered", "receipt_ids": [item.id for item in receipts]})
@@ -206,6 +218,8 @@ class FrontierService:
                 phase = "delivered"
                 # Only successful final delivery updates /link; history is never retained.
                 self.remember_sources(key, receipts, sources)
+                if prepared.truncated:
+                    await self.send(session, f"输入资料已截断：{prepared.truncation_reason}；回答仅依据已提供部分。")
                 if result.truncated:
                     await self.send(session, "本次模型输出达到长度上限，回答可能不完整。")
                 status = "done"
@@ -220,15 +234,39 @@ class FrontierService:
             # Never expose SDK messages/URLs/keys or traceback locals in a group chat.
             details = {key: exc.diagnostics[key] for key in ("code", "http_status", "retryable")
                        if key in exc.diagnostics} if isinstance(exc, FrontierError) else {}
-            trace.event({"type": "request_failed", "phase": phase, "error_type": type(exc).__name__, **details})
-            logger.warning("Frontier request {} failed ({}) after {:.1f}s", trace.id, type(exc).__name__, time.monotonic() - started)
+            if isinstance(exc, ImageInputError):
+                reason = str(exc)
+                details["code"] = getattr(exc, "code", "attachment_invalid")
+            elif isinstance(exc, JinaError):
+                reason = f"搜索服务失败：{exc}"
+                details["code"] = "search_" + exc.code
+            elif isinstance(exc, FrontierError):
+                # These are application-owned, sanitized messages, not SDK exceptions.
+                reason = str(exc)
+                details.setdefault("code", getattr(exc, "code", "answer_failed"))
+            elif isinstance(exc, TimeoutError):
+                reason = {
+                    "attachments": "解析消息或获取图片超时，请缩小聊天记录后重试。",
+                    "text_delivery": "回答文字发送超时，平台可能仍会送达。",
+                }.get(phase, "本轮处理超时，已回收资源，请稍后重试或缩小问题范围。")
+                details["code"] = phase + "_timeout"
+            else:
+                reason = {
+                    "attachments": "无法准备图片附件，请重新上传原图。",
+                    "answer": "问答处理发生内部异常，请联系管理员查看服务日志。",
+                    "result_processing": "回答结果处理失败，请联系管理员查看服务日志。",
+                    "text_delivery": "回答文字发送失败，请稍后重试。",
+                }.get(phase, "本轮处理失败，请联系管理员查看服务日志。")
+                details["code"] = phase + "_failed"
+            trace.event({"type": "request_failed", "phase": phase, "error_type": type(exc).__name__,
+                         "message": reason, **details})
+            logger.warning("Frontier request {} failed ({}) phase={} code={} reason={} after {:.1f}s",
+                           trace.id, type(exc).__name__, phase, details.get("code"), reason,
+                           time.monotonic() - started)
             if phase in ("jpeg_encoding", "image_delivery"):
                 # Also silence the outer request deadline expiring during image delivery.
                 return
-            if isinstance(exc, TimeoutError):
-                message = "本轮已超时并回收资源，其他问题不受影响。"
-            else:
-                message = "本轮未完成，请检查模型/搜索凭据、附件和服务日志；其他问题不受影响。"
+            message = f"本轮未完成：{reason}\n其他问题不受影响。"
             try:
                 await self.send(session, message)
             except Exception as delivery:  # noqa: BLE001 - failed error delivery must not escape

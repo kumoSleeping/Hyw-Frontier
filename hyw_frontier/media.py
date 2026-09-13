@@ -26,10 +26,10 @@ from PIL import Image, ImageOps
 
 from .jina import JinaError, public_url
 
-MAX_IMAGES = 20
-MAX_IMAGES_PER_ROUND = 5
+MAX_IMAGES = 600
+MAX_IMAGES_PER_ROUND = 10
 DOWNLOAD_TIMEOUT = 2.5
-DOWNLOAD_CONCURRENCY = 5
+DOWNLOAD_CONCURRENCY = 10
 READER_PRIORITY_IMAGES = 3
 MAX_JPEG_BYTES = 256 * 1024
 MAX_EDGE = 1280
@@ -104,14 +104,14 @@ def download(candidate: Candidate, cancel: Event, timeout: float = DOWNLOAD_TIME
     return candidate, raw, status, round((time.monotonic() - started) * 1000, 2)
 
 
-def compress(raw: bytes):
+def compress(raw: bytes, *, min_edge: int = 64):
     """One fast resize/JPEG pass; a second smaller pass only for unusually noisy images."""
     with warnings.catch_warnings(), ExitStack() as resources:
         warnings.simplefilter('error', Image.DecompressionBombWarning)
         source = resources.enter_context(closing(Image.open(resources.enter_context(BytesIO(raw)))))
         if (source.format not in ('JPEG', 'PNG', 'WEBP', 'GIF')
                 or source.width * source.height > MAX_PIXELS
-                or min(source.size) < 64):
+                or min(source.size) < min_edge):
             raise ValueError('unsupported_image')
         source.seek(0)  # Animated images use the first frame only.
         source.draft('RGB', (MAX_EDGE, MAX_EDGE))
@@ -137,11 +137,14 @@ def compress(raw: bytes):
 
 
 class ImagePipeline:
-    def __init__(self, history=()):
+    def __init__(self, history=(), *, max_images: int = MAX_IMAGES):
+        if type(max_images) is not int or max_images < 0:
+            raise ValueError('max_tool_images must be a non-negative integer')
+        self.max_images = max_images
         self.assets: dict[str, bytes] = {}
         self.seen: set[str] = set()
-        # Reuse previously reviewed previews without re-downloading or exceeding twenty
-        # distinct tool images in a multi-turn context. User-pasted images are separate.
+        # Reuse previews within the request-selected tool budget. User images and
+        # parsed chat records are separate; history replay never downloads again.
         for message in history:
             if message.get('role') != 'toolResult' or message.get('toolName') == 'crop_user_image':
                 continue
@@ -152,7 +155,7 @@ class ImagePipeline:
                 for row, block in zip((r for r in rows if r.get('status') == 'ready'), blocks):
                     url = public_url(row['url'])
                     data = block.get('data', '')
-                    if (len(self.assets) < MAX_IMAGES and block.get('mimeType') == 'image/jpeg'
+                    if (len(self.assets) < self.max_images and block.get('mimeType') == 'image/jpeg'
                             and len(data) <= 4 * ((MAX_JPEG_BYTES + 2) // 3)):
                         self.assets[url] = base64.b64decode(data, validate=True)
                         self.seen.add(url)
@@ -170,7 +173,7 @@ class ImagePipeline:
         self.prepared = 0
 
     def prepare(self, results: list[dict], cancel: Event, emit):
-        if len(self.seen) >= MAX_IMAGES or cancel.is_set():
+        if len(self.seen) >= self.max_images or cancel.is_set():
             return {'download_ms': 0, 'processing_ms': 0, 'new_images': 0}
         # Keep separate bounded pools so call order cannot exhaust Reader's quota.
         pools = {True: [], False: []}
@@ -211,7 +214,7 @@ class ImagePipeline:
                    + reader_images[READER_PRIORITY_IMAGES:])
         candidates = []
         for candidate in ordered:
-            if len(candidates) >= MAX_IMAGES_PER_ROUND or len(self.seen) >= MAX_IMAGES:
+            if len(candidates) >= MAX_IMAGES_PER_ROUND or len(self.seen) >= self.max_images:
                 break
             if candidate.url not in self.seen:
                 self.seen.add(candidate.url)
@@ -221,7 +224,7 @@ class ImagePipeline:
         # Attachment order follows tool-result order, independent of quota priority.
         candidates.sort(key=lambda candidate: candidate.owner)
         emit({'type': 'media_start', 'candidates': len(candidates), 'attempted': len(self.seen),
-              'limit': MAX_IMAGES, 'round_limit': MAX_IMAGES_PER_ROUND})
+              'limit': self.max_images, 'round_limit': MAX_IMAGES_PER_ROUND})
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=min(DOWNLOAD_CONCURRENCY, len(candidates))) as pool:
             downloaded = list(pool.map(lambda c: download(c, cancel), candidates))
@@ -269,5 +272,5 @@ class ImagePipeline:
         processing_ms = round((time.monotonic() - processing) * 1000, 2)
         emit({'type': 'media_end', 'download_ms': download_ms, 'processing_ms': processing_ms,
               'new_images': new_images, 'prepared': self.prepared, 'attempted': len(self.seen),
-              'limit': MAX_IMAGES, 'round_limit': MAX_IMAGES_PER_ROUND, 'images': details})
+              'limit': self.max_images, 'round_limit': MAX_IMAGES_PER_ROUND, 'images': details})
         return {'download_ms': download_ms, 'processing_ms': processing_ms, 'new_images': new_images}
