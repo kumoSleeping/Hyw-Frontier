@@ -112,9 +112,33 @@ if __name__ == "__main__":
 
 注入的 `Model` 决定提供商、协议和模型设置，不要同时传入 `provider`、`api`、`base_url`、`api_key` 或 `backend`。不传 `reasoning` 时保留实例设置；已验证的 DeepSeek 模型可显式传入三档映射，仅逐请求覆盖思考强度，不修改共享实例。共享客户端应在同一个事件循环中使用；Hyw 不关闭调用方注入的模型或客户端。示例模型为限时 ID，失效后需通过 `HYW_MODEL` 显式指定可用模型，不自动回退。
 
-思考等级切换工具、相关提示词及本地页面的思考控件暂时停用；底层参数保留。`reasoning={"high": "max", "medium": "low", "low": "off"}` 必须且只能包含高／中／低三个键，值可重复（例如全部 `"off"` 固定关闭），不接受单个字符串。支持的模型 ID 默认使用上述映射。API 的 `reasoning_mode="auto"`（默认）暂时全程保持 `medium`（实际强度 `low`），也可用 `"high"`、`"medium"`、`"low"` 固定对应档位；本地页面不再读取或发送浏览器保存的思考设置。
+思考等级切换工具及相关提示词暂时停用，页面可手动选择固定思考强度，并按模型记住设置。DeepSeek 可选 `off/low/high/max`；Gemini 3.8 Flash 可选 `low/medium/high`，不支持关闭或 `minimal`；本地 Qwen 保留模型自身设置。
+
+API 的 `reasoning={"high": "max", "medium": "low", "low": "off"}` 必须且只能包含高／中／低三个键，值可重复，不接受单个字符串。上述默认映射用于已验证的 DeepSeek；Gemini 默认映射为 `{"high": "high", "medium": "medium", "low": "low"}`。`reasoning_mode="auto"` 暂时全程保持 `medium`（DeepSeek 实际强度 `low`，Gemini 为 `medium`），也可用 `"high"`、`"medium"`、`"low"` 固定对应档位。页面选择具体强度时，三档都映射到该强度，不在提问过程中自动切换。
 
 也可以不注入实例，直接向 `answer()` 传入模型 ID 和连接参数；更底层的模型传输可通过 `backend` 注入。完整参数、返回字段及生命周期约定见 [库接口文档](docs/library.md)。
+
+## 本地 Gemini（调试页面可选）
+
+安装 Google 可选依赖：`uv sync --extra google`；之后使用 `.venv/bin/python -m hyw_frontier.cli serve` 启动，或用 `uv run --extra google hyw-frontier serve` 保留该依赖。
+
+Gemini Developer API 可用 `login google api_key` 保存密钥。Google Cloud / Vertex AI 则把服务账号 JSON 对象合并到 `~/.hyw-frontier/auth.json` 的 `google` 字段（保留 `"type": "service_account"` 和其他原始字段，不覆盖其他提供商）。该文件应位于仓库外，权限为 `0600`，父目录为 `0700`；不要上传到前端或提交 Git。显式 API Key 或环境变量中的 Google API Key 优先于已保存服务账号；服务账号使用自身 `project_id`，需具备 Vertex AI 调用权限，项目需启用 API 和结算。
+
+在同目录 `models.json` 中合并：
+
+```json
+{
+  "google": {
+    "model": "gemini-3.8-flash",
+    "label": "Gemini 3.8 Flash",
+    "location": "global"
+  }
+}
+```
+
+截至 2026-09-15，[最新通用 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-8-flash) 为 `gemini-3.8-flash`，最大输出 65,536 tokens；不自动回退其他型号。`location` 仅用于服务账号接入，默认 `global`。
+
+调试页面只有一个模型下拉框：仅展示凭据已配置且具有模型预设的选项（默认 DeepSeek 使用内置模型 ID），不提供任意提供商或模型 ID 输入。浏览器记住选择；修改后端配置后刷新页面即可更新选项。这里的“已配置”不代表已联网检查权限或本地模型服务正在运行。CLI 和库仍可显式指定模型。
 
 ## 本地 MLX 模型（调试页面可选）
 
@@ -139,7 +163,7 @@ Apple Silicon 上可用独立的 `mlx-vlm` 服务提供 OpenAI Chat Completions 
 }
 ```
 
-本机未开启 API 认证时，设置 `OPENAI_COMPATIBLE_API_KEY=local-mlx`，或用 `login openai-compatible api_key` 保存该占位字符串（非真实密钥）。重启调试服务并刷新页面，在提供商菜单选择本地选项，模型 ID 自动填入；DeepSeek 仍是默认选项。`model`、`label` 仅为页面预设，命令行及库调用仍显式指定模型 ID。
+本机未开启 API 认证时，设置 `OPENAI_COMPATIBLE_API_KEY=local-mlx`，或用 `login openai-compatible api_key` 保存该占位字符串（非真实密钥）。重启调试服务并刷新页面，在模型菜单选择本地选项即可，无需填写模型 ID；首次打开时 DeepSeek 仍是默认选项。`model`、`label` 仅为页面预设，命令行及库调用仍显式指定模型 ID。
 
 `max_output_tokens` 是**显式的部署输出预算**，优先于模型元数据；1024 并非模型理论最大输出能力。未配置时仍自动解析模型输出容量。16GB Mac 建议先用短对话和单张小图；本地模型 API 不联网，但 Frontier 的搜索与网页读取工具仍会联网。MLX 的 `--max-tokens` 是未指定请求额度时的默认值，并非全局硬上限。不要将无认证服务绑定到公网地址。
 

@@ -24,7 +24,7 @@ def safe_model_error(error: Exception) -> FrontierError:
     if type(status) is not int:
         status = None
     code = f"http_{status}" if status else "model_error"
-    message = {401: "模型认证失败，请检查 API Key。", 402: "模型账户额度不足。",
+    message = {401: "模型认证失败，请检查 API Key 或服务账号凭据。", 402: "模型账户额度不足。",
                403: "模型接口拒绝访问。", 404: "模型或 API 端点不存在；未回退其他模型或协议。",
                429: "模型接口限流；hyw 未追加重试。"}.get(status, "模型请求失败；原始异常已隐藏以保护凭据，hyw 未追加重试。")
     if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
@@ -118,8 +118,25 @@ def model_identity(model):
     from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
     if not isinstance(model, Model):
         raise TypeError("model 必须是模型 ID 字符串或 Pydantic AI Model 实例，不是类本身。")
-    api = "responses" if isinstance(model, OpenAIResponsesModel) else "chat" if isinstance(model, OpenAIChatModel) else "native"
+    api = ("responses" if isinstance(model, OpenAIResponsesModel) else "chat" if isinstance(model, OpenAIChatModel)
+           else "google" if model.system in ("google", "google-cloud", "google-vertex", "google-gla") else "native")
     return model.system, model.model_name, api
+
+
+def with_reasoning(settings, api, effort):
+    """Apply only request-local effort; preserve unrelated settings on borrowed models."""
+    settings = dict(settings or {})
+    if api in ("responses", "chat"):
+        settings["openai_reasoning_effort"] = "none" if effort == "off" else effort
+    elif api == "google" and effort in ("low", "medium", "high"):
+        thinking = dict(settings.get("google_thinking_config") or {})
+        thinking.pop("thinking_budget", None)  # Gemini 3 uses levels, not a simultaneous token budget.
+        thinking.setdefault("include_thoughts", True)
+        thinking["thinking_level"] = effort.upper()
+        settings["google_thinking_config"] = thinking
+    else:
+        raise FrontierError("该模型接口不支持请求的思考等级。")
+    return settings
 
 
 def default_model_settings(api, timeout, reasoning=None, *, max_output_tokens=None):
@@ -131,9 +148,7 @@ def default_model_settings(api, timeout, reasoning=None, *, max_output_tokens=No
         settings["openai_store"] = False
         if api == "responses":
             settings["openai_send_reasoning_ids"] = True
-        if reasoning is not None:
-            settings["openai_reasoning_effort"] = "none" if reasoning == "off" else reasoning
-    return settings
+    return with_reasoning(settings, api, reasoning) if reasoning is not None else settings
 
 
 def _response(message, provider: str, model: str, api: str) -> dict:
@@ -163,7 +178,7 @@ def _response(message, provider: str, model: str, api: str) -> dict:
     normalized_usage = {"input": max(0, usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens),
                         "output": usage.output_tokens, "cacheRead": usage.cache_read_tokens,
                         "cacheWrite": usage.cache_write_tokens,
-                        "reasoning": usage.details.get("reasoning_tokens", 0),
+                        "reasoning": usage.details.get("reasoning_tokens", usage.details.get("thoughts_tokens", 0)),
                         "totalTokens": usage.input_tokens + usage.output_tokens}
     if usage.cost is not None:
         normalized_usage["cost"] = {"total": float(usage.cost)}  # Catalog estimate, not an invoice.
@@ -229,8 +244,21 @@ class ModelSession:
                 from google.genai.types import HttpRetryOptions
                 from pydantic_ai.models.google import GoogleModel
                 from pydantic_ai.providers.google import GoogleProvider
-                provider = GoogleProvider(api_key=config.api_key, base_url=config.base_url,
-                                          retry_options=HttpRetryOptions(attempts=1))
+                if config.service_account is not None:
+                    from google.oauth2.service_account import Credentials
+                    from pydantic_ai.providers.google_cloud import GoogleCloudProvider
+                    try:
+                        credentials = Credentials.from_service_account_info(
+                            config.service_account, scopes=["https://www.googleapis.com/auth/cloud-platform"])
+                    except (ValueError, TypeError):
+                        raise FrontierError("Google 服务账号私钥或凭据格式无效。") from None
+                    provider = GoogleCloudProvider(credentials=credentials,
+                                                   project=config.service_account["project_id"],
+                                                   location=config.location,
+                                                   retry_options=HttpRetryOptions(attempts=1))
+                else:
+                    provider = GoogleProvider(api_key=config.api_key, base_url=config.base_url,
+                                              retry_options=HttpRetryOptions(attempts=1))
                 await self.resources.enter_async_context(provider)
                 self.client = provider.client
                 self.resources.callback(self.client.close)
@@ -257,10 +285,7 @@ class ModelSession:
         settings = (dict(model.settings) if model.settings else None) if self.preserve_settings else default_model_settings(
             self.api, self.timeout, request.get("reasoning"), max_output_tokens=model.settings["max_tokens"])
         if request.get("reasoning") is not None:
-            if self.api not in ("responses", "chat"):
-                raise FrontierError("动态思考仅支持已验证模型的 Responses/Chat 接口。")
-            settings = {**(settings or {}), "openai_reasoning_effort":
-                        "none" if request["reasoning"] == "off" else request["reasoning"]}
+            settings = with_reasoning(settings, self.api, request["reasoning"])
         if self.provider == "deepseek" and self.api == "responses" and (settings or {}).get("openai_reasoning_effort") != "none":
             # Off-mode turns contain no reasoning item. DeepSeek requires the field when
             # replaying assistant history with tools after enabling thinking. Send an empty

@@ -16,8 +16,10 @@
     <div id="sidebar-settings" class="sidebar-settings">
     <section class="settings">
       <h2>模型配置</h2>
-      <label for="provider">提供商</label><select id="provider" disabled></select>
-      <label for="model">模型 ID</label><input id="model" spellcheck="false" autocomplete="off" value="deepseek-flash" maxlength="150">
+      <label for="model">模型</label><select id="model" aria-describedby="model-hint" disabled></select>
+      <p id="model-hint" class="hint">仅显示后端已配置的模型；下一次提问生效，本浏览器记住选择。</p>
+      <label for="reasoning-effort">思考强度</label><select id="reasoning-effort" aria-describedby="reasoning-hint" disabled></select>
+      <p id="reasoning-hint" class="hint">按所选模型提供可用等级。</p>
       <label for="rounds">模型轮次安全阈值</label><input id="rounds" type="number" min="1" step="1" value="30" inputmode="numeric" aria-describedby="rounds-hint">
       <p id="rounds-hint" class="hint">默认30，可输入更大的正整数。</p>
       <label for="search-provider">搜索服务</label><select id="search-provider" disabled></select>

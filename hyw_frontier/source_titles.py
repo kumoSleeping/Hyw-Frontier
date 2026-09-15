@@ -1,5 +1,6 @@
 """Offline source labels from tool evidence, never assistant-authored link text."""
 import json
+from html.parser import HTMLParser
 from urllib.parse import unquote, urlsplit
 
 from .media import discover
@@ -10,6 +11,28 @@ def source_key(url: str) -> str:
         return unquote(urlsplit(url)._replace(fragment="").geturl())
     except ValueError:
         return url
+
+
+class _TitleParser(HTMLParser):
+    """Extract text from provider title markup without interpreting it as Markdown."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str):
+        self.parts.append(data)
+
+    def handle_starttag(self, tag: str, attrs):
+        if tag == "br":
+            self.parts.append(" ")
+
+
+def plain_title(title: str) -> str:
+    parser = _TitleParser()
+    parser.feed(title)
+    parser.close()
+    return " ".join("".join(parser.parts).split())
 
 
 def source_titles(messages: list[dict]) -> dict[str, str]:
@@ -37,7 +60,7 @@ def source_titles(messages: list[dict]) -> dict[str, str]:
                 url = row.get("url", "")
                 if not url:
                     continue
-                title = " ".join(row.get("title", "").split())
+                title = plain_title(row.get("title") or "")
                 if not title or title in {url, row.get("source_url")}:
                     title = urlsplit(url).hostname or url
                 for address in (url, row.get("source_url", "")):

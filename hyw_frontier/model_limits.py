@@ -11,13 +11,19 @@ _DEEPSEEK_LIMITS = dict.fromkeys((
     "deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash",
     "deepseek-v4-flash-vision-exp", "deepseek-v4.1-flash-expires-on-0910",
 ), 384_000)
+# https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-8-flash
+_GOOGLE_LIMITS = {"gemini-3.8-flash": 65_536}
 _CATALOG_URL = "https://models.dev/api.json"
 _catalog: tuple[float, dict] = (0, {})
 
 
 def known_output_limit(provider: str, model: str) -> int | None:
-    """Offline limits for verified DeepSeek IDs; does not change the requested model."""
-    return _DEEPSEEK_LIMITS.get(model) if provider == "deepseek" else None
+    """Offline limits for verified model IDs; does not change the requested model."""
+    if provider == "deepseek":
+        return _DEEPSEEK_LIMITS.get(model)
+    if provider == "google":
+        return _GOOGLE_LIMITS.get(model.removeprefix("models/"))
+    return None
 
 
 def _metadata_limit(data: dict) -> int | None:

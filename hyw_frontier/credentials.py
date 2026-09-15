@@ -1,4 +1,4 @@
-"""Project-local API keys and endpoint settings; never load Pi/Codex credentials."""
+"""Project-local model credentials and endpoints; never load Pi/Codex credentials."""
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import getpass
@@ -28,6 +28,8 @@ class ModelConnection:
     base_url: str | None
     api_key: str = field(repr=False)
     max_output_tokens: int | None = None
+    service_account: dict | None = field(default=None, repr=False)
+    location: str = "global"
 
 
 class CredentialStore:
@@ -91,7 +93,8 @@ class CredentialStore:
 
     def status(self):
         return [{"providerId": name, "type": entry.get("type"),
-                 "supported": name in PROVIDERS and entry.get("type") == "api_key"}
+                 "supported": name in PROVIDERS and (entry.get("type") == "api_key"
+                               or (name == "google" and entry.get("type") == "service_account"))}
                 for name, entry in self._load("auth.json").items() if isinstance(entry, dict)]
 
     def login(self, provider: str, method: str):
@@ -116,8 +119,15 @@ class CredentialStore:
     def model_config(self, provider: str) -> dict:
         config = self._load("models.json").get(provider, {})
         allowed = {"api", "base_url", "api_key_env", "model", "label", "max_output_tokens"}
+        if provider == "google":
+            allowed.add("location")
         if not isinstance(config, dict) or set(config) - allowed:
-            raise FrontierError("models.json 提供商设置仅支持 api、base_url、api_key_env、model、label、max_output_tokens。")
+            raise FrontierError("models.json 提供商设置仅支持 api、base_url、api_key_env、model、label、max_output_tokens；google 另支持 location。")
+        if "location" in config:
+            location = config["location"]
+            if (not isinstance(location, str) or not 1 <= len(location) <= 63
+                    or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in location)):
+                raise FrontierError("Google location 必须是有效区域名称，例如 global、us 或 us-central1。")
         for name, maximum in (("model", 150), ("label", 100)):
             value = config.get(name)
             if name in config and (not isinstance(value, str) or not value.strip() or len(value) > maximum):
@@ -167,8 +177,16 @@ class CredentialStore:
             entry = self._load("auth.json").get(provider, {})
             if not isinstance(entry, dict):
                 raise FrontierError("模型凭据格式无效。")
+            if provider == "google" and entry.get("type") == "service_account":
+                required = ("project_id", "client_email", "private_key", "token_uri")
+                if any(not isinstance(entry.get(name), str) or not entry[name].strip() for name in required):
+                    raise FrontierError("Google 服务账号凭据不完整。")
+                if entry["token_uri"] != "https://oauth2.googleapis.com/token" or base_url is not None:
+                    raise FrontierError("Google 服务账号仅允许官方 OAuth 和 Vertex AI 端点。")
+                return ModelConnection(provider, api, None, "", config.get("max_output_tokens"),
+                                       service_account=entry, location=config.get("location", "global"))
             if entry and entry.get("type") != "api_key":
-                raise FrontierError("已保存的是 OAuth 凭据；请为纯 Python 接入配置 API Key，原凭据未删除。")
+                raise FrontierError("已保存的凭据类型不受支持；请配置 API Key 或 Google 服务账号，原凭据未删除。")
             key = entry.get("key", "")
         if not isinstance(key, str) or not key.strip():
             raise FrontierError(f"未配置 {provider} API Key 凭据；请设置 {key_env} 或运行 login。",

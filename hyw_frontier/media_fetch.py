@@ -14,6 +14,12 @@ MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_TIMEOUT = 2.5
 
 
+class HTTPStatusError(ValueError):
+    def __init__(self, status: int):
+        super().__init__('http_error')
+        self.status = status
+
+
 class PinnedHTTPS(http.client.HTTPSConnection):
     def __init__(self, host, port, address, timeout):
         super().__init__(host, port, timeout=timeout, context=ssl.create_default_context())
@@ -55,7 +61,7 @@ def fetch(url, *, max_bytes=MAX_BYTES, timeout=DEFAULT_TIMEOUT,
                 url = urljoin(url, location)
                 continue
             if response.status != 200:
-                raise ValueError('http_error')
+                raise HTTPStatusError(response.status)
             length = response.getheader('Content-Length')
             if length and int(length) > max_bytes:
                 raise ValueError('too_large')
@@ -77,6 +83,10 @@ if __name__ == '__main__':
         if len(url) > 8192:
             raise ValueError('invalid_url')
         sys.stdout.buffer.write(fetch(url, timeout=timeout))
+    except HTTPStatusError as error:
+        # Only a numeric status crosses the worker boundary, never response bodies or headers.
+        sys.stderr.write(f'http_{error.status}')
+        sys.exit(2)
     except Exception:
         # No raw URLs, headers or network diagnostics cross the worker boundary.
         sys.exit(2)

@@ -1,5 +1,5 @@
 "use strict";
-import { createSearchProviderControl } from "./settings.js";
+import { createReasoningControl, createSearchProviderControl } from "./settings.js";
 import { createImageResult } from "./image-result.js";
 import { createImageInput } from "./image-input.js";
 import { createProcessIntro } from "./process-intro.js";
@@ -13,7 +13,7 @@ $("toggle-settings").addEventListener("click", () => {
   const expanded = document.querySelector(".sidebar").classList.toggle("settings-open");
   $("toggle-settings").setAttribute("aria-expanded", String(expanded));
 });
-const defaults = { deepseek: "deepseek-flash", openai: "gpt-4o-mini", anthropic: "", google: "", "openai-compatible": "" };
+let modelOptions = [];
 const imageResult = createImageResult($("result"));
 const processIntro = createProcessIntro($("process-intro"));
 const searchProgress = createSearchProgress($("search-progress"));
@@ -21,6 +21,7 @@ let session = null;
 let busy = false;
 let initialized = false;
 let searchControl = null;
+let reasoningControl = null;
 const imageInput = createImageInput({
   input: $("message"), preview: $("image-input"), onError: message => status(message, true),
   onChange: () => { $("send").disabled = busy || !initialized || imageInput.loading; },
@@ -44,12 +45,13 @@ function status(text, error = false) {
 
 function setBusy(value) {
   busy = value;
-  for (const id of ["provider", "model", "rounds", "search-provider", "search-mode", "new-chat", "message", "send"]) {
+  for (const id of ["model", "rounds", "search-provider", "search-mode", "new-chat", "message", "send"]) {
     $(id).disabled = value || !initialized;
   }
   imageInput.setDisabled(value || !initialized);
   $("send").disabled = value || !initialized || imageInput.loading;
   searchControl?.update(value || !initialized);
+  reasoningControl?.update(value || !initialized);
   $("stop").hidden = !value;
   $("stop").disabled = false;
   $("stop").textContent = "停止";
@@ -78,14 +80,15 @@ async function submit(event) {
   const text = $("message").value.trim();
   const images = imageInput.images;
   if (busy || !session || imageInput.loading || (!text && !images.length)) return;
-  if (!$("model").value.trim()) return status("请填写模型 ID", true);
+  const selectedModel = modelOptions.find(option => option.provider === $("model").value);
+  if (!selectedModel) return status("没有可用的已配置模型，请检查后端配置并刷新页面", true);
   const maxRounds = Number($("rounds").value);
   if (!Number.isSafeInteger(maxRounds) || maxRounds < 1) return status("模型轮次安全阈值必须是正整数", true);
   setBusy(true); imageResult.clear(); processIntro.clear(); searchProgress.clear();
   document.querySelector("main").classList.add("has-result");
   const request = {
-    session, message: text, images, provider: $("provider").value, model: $("model").value.trim(), max_rounds: maxRounds,
-    ...searchControl.requestSettings(),
+    session, message: text, images, provider: selectedModel.provider, model: selectedModel.model, max_rounds: maxRounds,
+    ...searchControl.requestSettings(), ...reasoningControl.requestSettings(),
   };
   const inspection = createInspection($("debug"), null, () => {
     inspection.body.scrollTop = inspection.body.scrollHeight;
@@ -160,8 +163,9 @@ $("message").addEventListener("keydown", (event) => {
   }
 });
 $("new-chat").addEventListener("click", () => newChat().catch(error => status(error.message, true)));
-$("provider").addEventListener("change", () => {
-  $("model").value = defaults[$("provider").value] || "";
+$("model").addEventListener("change", () => {
+  try { localStorage.setItem("frontier.modelProvider", $("model").value); } catch { /* Keep the in-page choice. */ }
+  reasoningControl?.update(busy || !initialized);
 });
 $("stop").addEventListener("click", async () => {
   $("stop").disabled = true; $("stop").textContent = "停止中…";
@@ -177,19 +181,25 @@ window.addEventListener("pagehide", () => { imageResult.clear(); imageInput.clea
     if (!response.ok) throw new Error("无法读取本地配置");
     const config = await response.json();
     imageInput.configure(config.image_input);
-    for (const provider of config.providers) {
-      const preset = config.provider_presets?.[provider];
-      if (preset?.model) defaults[provider] = preset.model;
-      const option = document.createElement("option"); option.value = provider;
-      option.textContent = preset?.label || provider;
-      $("provider").append(option);
+    modelOptions = config.model_options || [];
+    $("model").replaceChildren();
+    for (const preset of modelOptions) {
+      const option = document.createElement("option"); option.value = preset.provider;
+      option.textContent = preset.label;
+      $("model").append(option);
     }
-    $("provider").value = config.provider; $("model").value = config.model;
+    if (!modelOptions.length) throw new Error("后端尚未配置可用模型");
+    let savedModel;
+    try { savedModel = localStorage.getItem("frontier.modelProvider"); } catch { /* Storage may be unavailable. */ }
+    $("model").value = modelOptions.find(option => option.provider === savedModel)?.provider
+      || modelOptions.find(option => option.provider === config.provider)?.provider || modelOptions[0].provider;
     const storage = { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) };
+    reasoningControl = createReasoningControl({ select: $("reasoning-effort"), hint: $("reasoning-hint"),
+      config: config.reasoning, storage, getModel: () => modelOptions.find(option => option.provider === $("model").value) });
     searchControl = createSearchProviderControl({ select: $("search-provider"), modeSelect: $("search-mode"),
       hint: $("search-hint"), config: config.search, storage });
     $("prompt").textContent = config.system_prompt;
-    $("credentials").textContent = `DeepSeek ${config.credentials.deepseek ? "已配置" : "未配置"} / Jina ${config.credentials.jina ? "已配置" : "未配置"} / Parallel ${config.credentials.parallel ? "已配置" : "未配置"} / DDGS 无需密钥`;
+    $("credentials").textContent = `${modelOptions.length} 个已配置模型 / Jina ${config.credentials.jina ? "已配置" : "未配置"} / Parallel ${config.credentials.parallel ? "已配置" : "未配置"} / DDGS 无需密钥`;
     await newChat();
     initialized = true; setBusy(false); $("message").focus();
   } catch (error) {

@@ -84,12 +84,20 @@ class App:
             return session
 
     def config(self) -> dict:
-        try:
-            auth = json.loads((self.home / "auth.json").read_text())
-            deepseek_configured = bool(auth.get("deepseek"))
-        except (OSError, ValueError, AttributeError):
-            deepseek_configured = False
-        deepseek_configured = deepseek_configured or bool(os.environ.get("DEEPSEEK_API_KEY"))
+        store = CredentialStore(self.home)
+        presets = store.provider_presets()
+        configured, model_options = {}, []
+        for provider in PROVIDERS:
+            try:
+                store.connection(provider)
+                configured[provider] = True
+            except FrontierError:
+                configured[provider] = False
+            preset = presets[provider]
+            model = preset.get("model", DEFAULT_MODEL if provider == DEFAULT_PROVIDER else None)
+            if configured[provider] and model:
+                model_options.append({"provider": provider, "model": model,
+                                      "label": preset.get("label", f"{provider} · {model}")})
         try:
             load_jina_key(self.home)
             jina_configured = True
@@ -101,7 +109,7 @@ class App:
         except JinaError:
             parallel_configured = False
         return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL, "providers": list(PROVIDERS),
-                "provider_presets": CredentialStore(self.home).provider_presets(),
+                "provider_presets": presets, "model_options": model_options,
                 "language": DEFAULT_LANGUAGE, "media": MEDIA_CONFIG,
                 "message_input": {"max_total_bytes": MAX_MESSAGE_BYTES, "max_blocks": MAX_MESSAGE_BLOCKS},
                 "development": {"auto_reload": os.environ.get("HYW_FRONTIER_RELOAD") == "1", "pid": os.getpid()},
@@ -149,6 +157,7 @@ class App:
                               "source_url_wrap": "multiline_url",
                               "source_url_display": "percent_decoded",
                               "source_title": "tool_page_title_or_hostname",
+                              "source_title_normalization": "html_to_plain_text",
                               "source_title_wrap": "single_line_ellipsis",
                               "source_icons": "prefetched_favicon_with_offline_fallback",
                               "favicons": FAVICON_CONFIG,
@@ -157,7 +166,7 @@ class App:
                               "nested_card_alignment": "content_bounds",
                               "worker": self.renderer.status() if isinstance(self.renderer, CardRenderer) else {"mode": "custom"}},
                 "tools": [tool["name"] for tool in tool_definitions()], "system_prompt": load_prompt(),
-                "credentials": {"deepseek": deepseek_configured, "jina": jina_configured, "parallel": parallel_configured}}
+                "credentials": {**configured, "jina": jina_configured, "parallel": parallel_configured}}
 
 
 class Server(ThreadingHTTPServer):

@@ -19,7 +19,7 @@ def needs_reconsideration(previous: dict | None, provider: str, model: str, sett
     if any(prior.get(key) != settings[key] for key in ("mode", "mapping")):
         return True  # A caller explicitly changed mode or one of the three mappings.
     tiers = {"low": 0, "medium": 1, "high": 2}
-    efforts = {"off": 0, "low": 1, "high": 2, "max": 3}
+    efforts = {"off": 0, "low": 1, "medium": 2, "high": 3, "max": 4}
     return (tiers.get(settings["level"], -1) > tiers.get(prior.get("level"), -1)
             or efforts.get(settings["effort"], -1) > efforts.get(prior.get("effort"), -1))
 
@@ -35,13 +35,14 @@ def resolve_reasoning_mode(value: str = "auto") -> str:
 
 
 def resolve_reasoning(provider: str, model: str, value: dict[str, str] | None = None) -> dict[str, str] | None:
-    supported = provider == _CONFIG["provider"] and model in _CONFIG["models"]
+    profile = next((item for item in _CONFIG["profiles"]
+                    if provider in item["providers"] and model.removeprefix("models/") in item["models"]), None)
     if value is None:
-        return deepcopy(_CONFIG["mapping"]) if supported else None
+        return deepcopy(profile["mapping"]) if profile else None
     if not isinstance(value, dict) or set(value) != set(_CONFIG["tiers"]):
         raise ValueError("reasoning 必须且只能包含 high、medium、low 三个档位")
-    if any(not isinstance(effort, str) or effort not in _CONFIG["levels"] for effort in value.values()):
-        raise ValueError("reasoning 每个档位必须为 off、low、high 或 max；允许重复")
-    if not supported:
-        raise ValueError("当前模型不支持动态思考等级配置")
+    if profile is None:
+        raise ValueError("当前模型不支持思考等级配置")
+    if any(not isinstance(effort, str) or effort not in profile["levels"] for effort in value.values()):
+        raise ValueError("当前模型的 reasoning 档位必须为 " + "、".join(profile["levels"]) + "；允许重复")
     return dict(value)

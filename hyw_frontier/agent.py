@@ -189,7 +189,11 @@ class SearchAgent:
         media = ImagePipeline(self.context["messages"], max_images=self.max_tool_images)
         self._media = media
         self.image_assets = media.assets
-        media_enabled = provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp")
+        media_enabled = (
+            (provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp"))
+            or (provider in ("google", "google-cloud", "google-vertex", "google-gla")
+                and model.removeprefix("models/") == "gemini-3.8-flash")
+        )
         def image_count():
             return sum(block.get("type") == "image" for message in self.context["messages"]
                        if message.get("role") == "toolResult" and message.get("toolName") != "crop_user_image"

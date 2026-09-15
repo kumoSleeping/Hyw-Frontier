@@ -51,7 +51,7 @@ asyncio.run(main())
 
 - 直接使用实例的 `settings`，不会覆盖其思考强度、token 上限、温度、SDK 超时或连接配置；不修改实例。上面的 `AsyncOpenAI` 仅用于显式控制连接生命周期，也可以使用你已有的 Pydantic AI 提供商实例。
 - 不再同时传 `provider`、`api`、`base_url`、`api_key` 或 `backend`，冲突会明确报错。`home` 仍可指定**搜索工具**凭据目录，模型不读取 hyw 的模型凭据文件。
-- 思考等级切换工具及相关提示词暂时停用，底层参数保留。`reasoning` 可显式提供三档映射，例如 `{"high": "max", "medium": "low", "low": "off"}`。必须恰好包含这三个键，每个值可选 `off/low/high/max`，允许任意重复，不接受旧的单字符串。仅支持 `reasoning.json` 中已验证的 DeepSeek 模型。不传时，模型 ID 使用项目默认映射，注入的 `Model` 保留自己的设置；显式映射只覆盖单次请求的 effort，不修改实例。`reasoning_mode="auto"`（默认）暂时全程保持中档（默认实际强度为 `low`）；设为 `"high"`、`"medium"` 或 `"low"` 可固定对应档位，仍使用完整三档映射。
+- 思考等级切换工具及相关提示词暂时停用，底层参数保留。`reasoning` 可显式提供三档映射，例如 `{"high": "max", "medium": "low", "low": "off"}`。必须恰好包含这三个键，DeepSeek 的值可选 `off/low/high/max`，Gemini 3.8 Flash 可选 `low/medium/high`，允许任意重复，不接受旧的单字符串。仅支持 `reasoning.json` 中已验证的模型。不传时，模型 ID 使用项目默认映射，注入的 `Model` 保留自己的设置；显式映射只覆盖单次请求的 effort，不修改实例。`reasoning_mode="auto"`（默认）暂时全程保持中档（DeepSeek 默认为 `low`，Gemini 默认为 `medium`）；设为 `"high"`、`"medium"` 或 `"low"` 可固定对应档位，仍使用完整三档映射。
 - 支持流式文本和函数工具的 Pydantic AI 模型适配器可使用这一入口，包括其他供应商的原生模型。hyw 保留自己的系统提示词、工具注册表、历史和图片预算，不运行 Pydantic AI Agent。
 - 模型请求在调用 `answer()` 的事件循环中执行，工具编排与绘图仍在工作线程/隔离进程。共享实例应在**同一个事件循环**中使用，不要跨多个 `asyncio.run()` 复用已使用过的异步客户端。只要模型/客户端本身支持并发，同一实例可服务多个并发 `answer()`。
 - hyw 不进入或退出外部模型的上下文，不关闭其客户端。取消只取消并等待本次请求收尾，不取消使用同一客户端的其他问答；`timeout` 仍作为本次单轮请求的外层时间上限，不改写实例的 SDK 设置。

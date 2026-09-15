@@ -98,6 +98,8 @@ def download(candidate: Candidate, cancel: Event, timeout: float = DOWNLOAD_TIME
         )
         if result.returncode == 0 and result.stdout:
             raw, status = result.stdout, 'downloaded'
+        elif re.fullmatch(rb'http_[1-5][0-9]{2}', result.stderr):
+            status = 'download_' + result.stderr.decode('ascii')
     except subprocess.TimeoutExpired:
         status = 'download_timeout'
     except OSError:

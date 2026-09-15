@@ -109,7 +109,8 @@ async def answer(
     A native Pydantic AI `Model` instance may replace the model ID. Its provider and
     settings are authoritative; do not also pass provider/api/base_url/api_key/backend.
     `reasoning` optionally selects effort: exactly high/medium/low keys, each
-    mapped to off/low/high/max (duplicates allowed), for verified DeepSeek models.
+    mapped to off/low/high/max for verified DeepSeek models, or low/medium/high for
+    Gemini 3.8 Flash (duplicates allowed).
     Dynamic switching is temporarily disabled. `reasoning_mode='auto'` keeps medium
     throughout each question; high/medium/low locks the corresponding tier.
     Model IDs use the project mapping by default; native Models keep their own settings
