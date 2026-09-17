@@ -15,9 +15,11 @@ from urllib.parse import urlsplit
 
 from .agent import AgentLimitError, SearchAgent
 from .credentials import CredentialStore
+from .image_bridge import bridge_status, save_bridge
 from .ddgs import SEARCH_CONFIG as DDGS_SEARCH_CONFIG
 from .image_input import IMAGE_INPUT_CONFIG, MAX_MESSAGE_BYTES, MAX_MESSAGE_BLOCKS, ImageInputError, validate_images
 from .image_crop import CROP_CONFIG
+from .reverse_image import REVERSE_IMAGE_CONFIG
 from .jina import SEARCH_ENDPOINT as JINA_SEARCH_ENDPOINT, JinaError, load_jina_key
 from .media import MEDIA_CONFIG, MAX_IMAGES
 from .model_limits import known_output_limit
@@ -117,6 +119,7 @@ class App:
                            "mode": SEARCH_MODE, "modes": list(SEARCH_MODES),
                            "ddgs": DDGS_SEARCH_CONFIG},
                 "image_search_providers": {"jina": "jina", "parallel": "jina", "ddgs": "ddgs"},
+                "reverse_image_search": {**REVERSE_IMAGE_CONFIG, **bridge_status(self.home)},
                 "search_endpoints": {"jina": JINA_SEARCH_ENDPOINT},
                 "tools_by_search_provider": {provider: [tool["name"] for tool in tool_definitions(provider)]
                                              for provider in SEARCH_PROVIDERS},
@@ -220,6 +223,10 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/config":
             return self._json(200, self.server.app.config())
+        if path == "/api/image-bridge":
+            if not self._allowed(write=True):
+                return self._json(403, {"error": "图床设置需要本机页面鉴权"})
+            return self._json(200, bridge_status(self.server.app.home, include_url=True))
         if path.startswith("/api/images/"):
             if not self._allowed(write=True):
                 return self._json(403, {"error": "图片需要本机页面鉴权"})
@@ -268,6 +275,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(403, {"error": "同源校验失败，请刷新本机页面"})
         try:
             data = self._body()
+            if self.path == "/api/image-bridge":
+                try:
+                    return self._json(200, save_bridge(self.server.app.home, data))
+                except JinaError as exc:
+                    return self._json(400, {"error": str(exc)})
+                except OSError:
+                    return self._json(500, {"error": "无法保存本机图床配置"})
             if self.path == "/api/session":
                 old = data.get("replace")
                 if old is not None:

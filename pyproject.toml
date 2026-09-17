@@ -12,6 +12,7 @@ dependencies = [
     "ddgs>=9.16,<10",
     "httpx>=0.28,<1",
     "jsonschema>=4.23,<5",
+    "markdown-it-py>=3,<5",
     "md2png[hyw,math]==0.1.0",
     "pydantic-ai-slim[openai]==2.42.0",
     "urllib3>=2.7,<3",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from contextlib import ExitStack, closing
 from io import BytesIO
@@ -19,11 +20,17 @@ CROP_CONFIG = {
     "max_crop_edge": 1536, "max_crop_bytes": 768 * 1024,
     "resize_filter": "bilinear", "resize_reducing_gap": 2.0,
     "decoded_source_cache_size": 1,
+    "reverse_search_source": "crop_id",
 }
 
 
 def _marker(kind: str, metadata: dict) -> dict:
     return {"type": "text", "text": kind + " " + json.dumps(metadata, ensure_ascii=False)}
+
+
+def _crop_id(source_id: str, bbox: list[int], data: str) -> str:
+    identity = json.dumps([source_id, bbox, data], separators=(",", ":"))
+    return "crop_" + hashlib.sha256(identity.encode()).hexdigest()
 
 
 def _encode(image: Image.Image) -> dict:
@@ -57,6 +64,7 @@ class UserImageCrops:
 
     def __init__(self, messages: list[dict]):
         self.originals: list[dict] = []
+        self._crops: dict[str, dict] = {}
         self.lock = Lock()
         self._source: Image.Image | None = None
         self._source_id: str | None = None
@@ -91,6 +99,23 @@ class UserImageCrops:
             block["_user_image"] = metadata
             content.extend([_marker("user_image_original", metadata), block])
         message["content"] = content
+        original_ids = {block["_user_image"]["source_id"] for block in self.originals}
+        # Retain exact crop bytes and upload metadata across follow-up turns, but
+        # never reactivate crops belonging to an older image-bearing user turn.
+        for previous in messages[index + 1:]:
+            if previous.get("role") != "toolResult" or previous.get("toolName") != "crop_user_image" or previous.get("isError"):
+                continue
+            for block in previous.get("content", []):
+                crop = block.get("_crop_image")
+                if (block.get("type") == "image" and isinstance(crop, dict)
+                        and crop.get("source_id") in original_ids
+                        and crop.get("crop_id") == _crop_id(crop["source_id"], crop.get("bbox"), block.get("data", ""))):
+                    self._crops[crop["crop_id"]] = block
+
+    def resolve_search_image(self, source_id: str) -> dict | None:
+        with self.lock:
+            return self._crops.get(source_id) or next((block for block in self.originals
+                if block["_user_image"]["source_id"] == source_id), None)
 
     def _load_source(self, original: dict) -> Image.Image:
         source_id = original["_user_image"]["source_id"]
@@ -118,6 +143,7 @@ class UserImageCrops:
                 self._source = None
             self._source_id = None
             self.originals.clear()
+            self._crops.clear()
 
     def crop(self, source_id: str, bbox: list[int]) -> tuple[dict, list[dict]]:
         with self.lock:
@@ -143,10 +169,13 @@ class UserImageCrops:
                     raise ValueError("source_dimensions_changed")
                 with source.crop(tuple(bbox)) as crop:
                     block = _encode(crop)
-                    marker = {"source_id": source_id, "bbox": bbox,
+                    crop_id = _crop_id(source_id, bbox, block["data"])
+                    marker = {"source_id": source_id, "crop_id": crop_id, "bbox": list(bbox),
                               "width": crop.width, "height": crop.height}
                 block["_crop_source"] = source_id
-                report = {"ok": True, "source_id": source_id, "bbox": bbox,
+                block["_crop_image"] = marker
+                block = self._crops.setdefault(crop_id, block)
+                report = {"ok": True, "source_id": source_id, "crop_id": crop_id, "bbox": bbox,
                           "source_width": width, "source_height": height,
                           "crop_width": bbox[2] - bbox[0], "crop_height": bbox[3] - bbox[1],
                           "width": marker["width"], "height": marker["height"],

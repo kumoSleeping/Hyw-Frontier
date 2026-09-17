@@ -10,6 +10,7 @@ from typing import Callable
 
 from .jina import JinaClient
 from .image_crop import UserImageCrops
+from .reverse_image import ReverseImageSearch
 from .favicons import FaviconPipeline
 from .media import ImagePipeline, MAX_IMAGES, MAX_IMAGES_PER_ROUND
 from .reasoning import RECONSIDER_PROMPT, needs_reconsideration, resolve_reasoning, resolve_reasoning_mode
@@ -49,6 +50,7 @@ class SearchAgent:
         self.image_assets: dict[str, bytes] = {}
         self._media: ImagePipeline | None = None
         self._crops: UserImageCrops | None = None
+        self._reverse_images: ReverseImageSearch | None = None
         self.favicon_assets: dict[str, bytes] = {}
         self._favicons: FaviconPipeline | None = None
         self.prefetch_icons = prefetch_icons
@@ -67,6 +69,10 @@ class SearchAgent:
         self.context = None
         self.tools.set_reasoning = None
         self.tools.crop_user_image = None
+        self.tools.reverse_image_search = None
+        if self._reverse_images is not None:
+            self._reverse_images.close()
+            self._reverse_images = None
         if self._crops is not None:
             self._crops.close()
             self._crops = None
@@ -88,12 +94,16 @@ class SearchAgent:
         self._check_cancelled()
         data = json.loads(result["content"][0]["text"])
         sources = []
-        if result["toolName"] in ("web_search", "search_images", "jina_read_url"):
+        if result["toolName"] in ("web_search", "search_images", "jina_read_url", "reverse_image_search"):
             for row in data.get("results", []):
                 if not row.get("ok"):
                     continue
                 candidates = row.get("results", []) if result["toolName"] in ("web_search", "search_images") else [row]
+                if result["toolName"] == "reverse_image_search":
+                    candidates = [source for match in row.get("matches", [])
+                                  for source in match.get("sources", [match])]
                 sources.extend({"title": item.get("title", ""), "url": item.get("url", ""),
+                                **({"engine": item["engine"]} if item.get("engine") else {}),
                                 "kind": "search" if result["toolName"] in ("web_search", "search_images") else "page"}
                                for item in candidates)
         if self._favicons is not None:
@@ -143,6 +153,10 @@ class SearchAgent:
             # Decoded user pixels are not needed by the renderer; release before rendering.
             self.tools.set_reasoning = None
             self.tools.crop_user_image = None
+            self.tools.reverse_image_search = None
+            if self._reverse_images is not None:
+                self._reverse_images.close()
+                self._reverse_images = None
             if self._crops is not None:
                 self._crops.close()
                 self._crops = None
@@ -181,6 +195,9 @@ class SearchAgent:
         crops = UserImageCrops(self.context["messages"])
         self._crops = crops
         self.tools.crop_user_image = crops.crop if crops.originals else None
+        self._reverse_images = ReverseImageSearch(self.tools.jina, crops.originals,
+                                                  image_lookup=crops.resolve_search_image)
+        self.tools.reverse_image_search = self._reverse_images.search
         # Runtime definitions own provider-specific descriptions as well as execution.
         requested = {tool["name"] for tool in self.context["tools"]}
         self.context["tools"] = [tool for tool in self.tools.definitions if tool["name"] in requested

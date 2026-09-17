@@ -38,6 +38,25 @@ async function post(path, data) {
   return response;
 }
 
+async function loadBridgeSettings() {
+  try {
+    const response = await fetch("/api/image-bridge", { headers: { "X-Frontier-Token": token } });
+    if (!response.ok) throw new Error("无法读取图床设置");
+    const config = await response.json();
+    $("bridge-url").value = config.url || "";
+    $("bridge-status").textContent = config.configured ? "已配置" : "";
+  } catch (error) { $("bridge-status").textContent = error.message; }
+}
+$("save-bridge").addEventListener("click", async () => {
+  $("save-bridge").disabled = true;
+  try {
+    await post("/api/image-bridge", { url: $("bridge-url").value, api_key: $("bridge-key").value });
+    $("bridge-status").textContent = "已保存，下一次提问生效";
+  } catch (error) { $("bridge-status").textContent = error.message; }
+  finally { $("bridge-key").value = ""; $("save-bridge").disabled = false; }
+});
+loadBridgeSettings();
+
 function status(text, error = false) {
   $("activity").textContent = text;
   $("activity").classList.toggle("error", error);
@@ -112,6 +131,7 @@ async function submit(event) {
     else if (item.type === "tool_start" && item.name === "web_search") status("正在搜索…");
     else if (item.type === "tool_start" && item.name === "search_images") status("正在搜索图片…");
     else if (item.type === "tool_start" && item.name === "crop_user_image") status("正在裁剪用户图片…");
+    else if (item.type === "tool_start" && item.name === "reverse_image_search") status("正在以图搜图…");
     else if (item.type === "tool_start" && item.name === "jina_read_url") status("正在读取网页…");
     else if (item.type === "render_start") status("正在生成图片…");
     else if (item.type === "done") {

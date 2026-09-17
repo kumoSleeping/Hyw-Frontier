@@ -30,6 +30,7 @@ from .media_fetch import MAX_BYTES as MAX_DOWNLOAD_BYTES
 MAX_IMAGES = 600
 MAX_IMAGES_PER_ROUND = 10
 DOWNLOAD_TIMEOUT = 2.5
+REVERSE_IMAGE_DOWNLOAD_TIMEOUT = DOWNLOAD_TIMEOUT * 2
 DOWNLOAD_CONCURRENCY = 10
 READER_PRIORITY_IMAGES = 3
 MAX_JPEG_BYTES = 256 * 1024
@@ -37,9 +38,10 @@ MAX_EDGE = 1280
 MAX_PIXELS = 25_000_000
 MEDIA_CONFIG = {'enabled': True, 'max_images': MAX_IMAGES, 'max_images_per_round': MAX_IMAGES_PER_ROUND,
                 'download_timeout_seconds': DOWNLOAD_TIMEOUT, 'max_download_bytes': MAX_DOWNLOAD_BYTES,
+                'reverse_image_download_timeout_seconds': REVERSE_IMAGE_DOWNLOAD_TIMEOUT,
                 'concurrency': DOWNLOAD_CONCURRENCY, 'format': 'image/jpeg', 'max_edge': MAX_EDGE,
                 'jpeg_quality': 75, 'max_image_bytes': MAX_JPEG_BYTES,
-                'discovery': 'search_images_and_reader_image_links', 'compression': 'in_memory',
+                'discovery': 'search_images_reverse_image_matches_and_reader_image_links', 'compression': 'in_memory',
                 'reader_priority_images': READER_PRIORITY_IMAGES, 'unused_slots': 'shared',
                 'rendering': 'approved_bytes_only', 'attachment_binding': 'adjacent_id_url_label'}
 _URL = re.compile(r'''https?://[^\s<>"'`\[\]，。；！？、（）【】]+''')
@@ -54,6 +56,8 @@ class Candidate:
     source_url: str
     title: str
     owner: int
+    engines: tuple[str, ...] = ()
+    source_urls: tuple[str, ...] = ()
 
 
 def discover(text: str, source_url: str, title: str, owner: int):
@@ -182,9 +186,9 @@ class ImagePipeline:
         pools = {True: [], False: []}
         pooled_urls = {True: set(), False: set()}
         for owner, result in enumerate(results):
-            if result.get('toolName') not in ('web_search', 'search_images', 'jina_read_url') or result.get('isError'):
+            if result.get('toolName') not in ('web_search', 'search_images', 'jina_read_url', 'reverse_image_search') or result.get('isError'):
                 continue
-            reader = result['toolName'] == 'jina_read_url'
+            reader = result['toolName'] in ('jina_read_url', 'reverse_image_search')
             pool, urls = pools[reader], pooled_urls[reader]
             if len(pool) >= MAX_IMAGES_PER_ROUND:
                 continue
@@ -193,12 +197,16 @@ class ImagePipeline:
                 if not batch.get('ok'):
                     continue
                 rows = batch.get('results', []) if result['toolName'] in ('web_search', 'search_images') else [batch]
+                if result['toolName'] == 'reverse_image_search':
+                    rows = batch.get('matches', [])
                 for row in rows:
                     url, title = row.get('url', ''), row.get('title', '')
                     text = row.get('snippet', row.get('content', '')) + '\n' + url
-                    if result['toolName'] == 'search_images':
+                    if result['toolName'] in ('search_images', 'reverse_image_search'):
                         try:
-                            discovered = [Candidate(public_url(row.get('image_url', '')), public_url(url), title, owner)]
+                            discovered = [Candidate(public_url(row.get('image_url', '')), public_url(url), title, owner,
+                                                    tuple(row.get('engines', [])),
+                                                    tuple(dict.fromkeys(source['url'] for source in row.get('sources', []))))]
                         except JinaError:
                             continue
                     else:
@@ -230,7 +238,9 @@ class ImagePipeline:
               'limit': self.max_images, 'round_limit': MAX_IMAGES_PER_ROUND})
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=min(DOWNLOAD_CONCURRENCY, len(candidates))) as pool:
-            downloaded = list(pool.map(lambda c: download(c, cancel), candidates))
+            downloaded = list(pool.map(lambda c: download(
+                c, cancel, REVERSE_IMAGE_DOWNLOAD_TIMEOUT
+                if results[c.owner]['toolName'] == 'reverse_image_search' else DOWNLOAD_TIMEOUT), candidates))
         download_ms = round((time.monotonic() - started) * 1000, 2)
         emit({'type': 'media_download_end', 'duration_ms': download_ms, 'candidates': len(candidates)})
         processing = time.monotonic()
@@ -241,6 +251,8 @@ class ImagePipeline:
         for candidate, raw, status, elapsed in downloaded:
             row = {'url': candidate.url, 'source_url': candidate.source_url, 'title': candidate.title,
                    'status': status, 'download_ms': elapsed}
+            if candidate.engines:
+                row.update(engines=list(candidate.engines), source_urls=list(candidate.source_urls))
             before = time.monotonic()
             if raw is not None and not cancel.is_set():
                 try:
@@ -254,7 +266,9 @@ class ImagePipeline:
                                bytes=len(jpeg), mimeType='image/jpeg')
                     image_blocks.setdefault(candidate.owner, []).extend([
                         {'type': 'text', 'text': json.dumps({
-                            'media_attachment': row['image_id'], 'url': candidate.url},
+                            'media_attachment': row['image_id'], 'url': candidate.url,
+                            **({'engines': list(candidate.engines), 'source_urls': list(candidate.source_urls)}
+                               if candidate.engines else {})},
                             ensure_ascii=False)},
                         {'type': 'image', 'mimeType': 'image/jpeg', 'data': base64.b64encode(jpeg).decode('ascii')},
                     ])

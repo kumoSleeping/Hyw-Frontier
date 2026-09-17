@@ -21,6 +21,8 @@ jina.json
 jina.json.*
 parallel.json
 parallel.json.*
+image-bridge.json
+image-bridge.json.*
 credentials.json
 credentials.json.*
 credentials.yml

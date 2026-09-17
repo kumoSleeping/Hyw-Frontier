@@ -155,6 +155,10 @@ print("本次实际合计（USD）：", result.costs.total_usd)
 
 ## 搜索图片
 
+`reverse_image_search` 按需进行混合以图搜图：原图 `source_id`、成功裁剪返回的 `crop_id`（填入 `source_id`），或公开 HTTPS 图片 `url`；`source_id` 与 `url` 二选一，上传一次后并行通过三个匿名 Jina Reader 查询 Yandex、Google Lens `/upload`、TinEye。`sources` 始终保留三个引擎的名称、状态、完整 Reader 正文和 `match_ids`，一个失败不影响其他来源；`matches` 按相同图片 URL（无图片时按页面 URL）合并，保留全部 `engines`、来源关联及 `duplicate_count`。结果按引擎轮流排列，避免一个来源占满图片预算。不做视觉相似度去重，不把验证页当成空匹配。可选 `page` 仅控制 TinEye，其他两个来源复用任务内缓存。图片沿用统一压缩、下载预算及取消机制，硬超时 5 秒（普通搜图 2.5 秒）；不下载 blob 缩略图，失败仍保留文字。只有调用才上传，同图链接跨历史消息复用到失效；图床单张上限 5 MiB，按北京时间每天 00:00 过期，午夜前最后 60 秒不接受新上传。
+
+图床地址及上传密钥通过本机设置保存到应用 home 下的 `image-bridge.json`（默认 `~/.hyw-frontier/image-bridge.json`，权限 0600）。仓库仅包含通用 Worker 模板，使用 Cloudflare secret `UPLOAD_TOKEN`，不含个人部署地址、KV ID 或真实密钥。未配置时明确报错，无默认个人服务。`/api/config` 仅公开配置状态；图床设置读写需要本机页面鉴权，读取也不返回密钥，空密钥只在地址不变时保留旧值。公网图片 URL 必须传给搜索引擎并返回给模型；请勿把包含个人图片链接的本地日志或测试报告纳入公开仓库。
+
 `answer(..., max_tool_images=600)` 可逐请求配置工具图片总预算，接受任意非负整数；`0` 禁用新增工具图片。有工具图片的历史仍需足够预算，不因传0静默删图。`Bridge.ask`、`SearchAgent`、CLI `ask --max-tool-images`、网页 `/api/chat` 参数和 Entari 同名配置均支持；每轮10张、下载并发10不随总预算改变。
 
 默认 DeepSeek 视觉模型会从搜索/Reader 返回的实际图片链接中提取候选，每轮新增处理最多10张、默认总共600张工具图片（同轮工具共享额度，失败占尝试预算，历史图片复用并计入总预算）；单张原图最多下载20 MiB、2.5秒硬超时、最多10张并发，失败跳过。压缩为最长边1280、质量75的 JPEG，全程内存处理后随工具结果发送，单图最多256KiB。不增设压缩 HTTP 服务，不让模型访问本地文件。
@@ -194,3 +198,5 @@ result.image.save("answer.png")
 API Key 优先放在环境变量或项目外的 `~/.hyw-frontier/`。项目及 `md2png/` 目录的 `.gitignore` 排除本地凭据目录、`auth.json`、`jina.json`、`parallel.json` 及备份、常用秘密文件、私钥、本地覆盖配置、请求日志和结果图。`.env.example` 只应包含无真实密钥的示例。
 
 Git 忽略规则按路径工作，不识别文件内容，也不会移除已跟踪或已提交的秘密。不要在源码或说明中硬编码密钥；如果密钥曾提交或泄露，需要撤销并轮换，单改 `.gitignore` 不能补救历史泄露。
+
+裁剪接力搜图：`crop_user_image` 返回 `crop_id`，对应实际返回的裁剪 JPEG 字节。将它传入 `reverse_image_search(source_id=...)` 后只上传裁剪图，不上传原图；裁剪本身不触发上传。裁剪编号可在同一请求及后续聊天中复用，直到出现新的含图用户消息；再次裁剪仍使用原图编号与原图坐标。

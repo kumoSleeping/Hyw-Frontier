@@ -52,6 +52,7 @@ class ToolRuntime:
         self.send = send
         self.set_reasoning: Callable[[str], dict] | None = None
         self.crop_user_image: Callable[[str, list[int]], tuple[dict, list[dict]]] | None = None
+        self.reverse_image_search: Callable[[dict], dict] | None = None
         self.jina = jina
         self.search_provider = search_provider
         self.definitions = tool_definitions(search_provider)
@@ -79,6 +80,7 @@ class ToolRuntime:
     def close(self):
         self.send = None  # Do not retain the caller's callback/event loop through a traceback.
         self.crop_user_image = None
+        self.reverse_image_search = None
         self.set_reasoning = None
         try:
             self.jina.close()
@@ -109,13 +111,13 @@ class ToolRuntime:
                     on_item({"type": "query_end", "query_index": index, "query": item.get(identity, ""),
                              "duration_ms": round((time.monotonic() - started) * 1000, 2),
                              "ok": result["ok"], "cached": result.get("cached"), "code": result.get("code"),
-                             "result_count": len(result.get("results", []))})
+                             "result_count": len(result.get("results", result.get("matches", [])))})
             return result
         with ThreadPoolExecutor(max_workers=min(5, len(items))) as pool:
             results = list(pool.map(run, enumerate(items)))
         successes = sum(row["ok"] for row in results)
         return {
-            "ok": successes > 0, "partial": 0 < successes < len(results), "results": results,
+            "ok": successes > 0, "partial": 0 < successes < len(results) or any(row.get("partial") for row in results), "results": results,
         }
 
     def execute(self, call: dict, *, on_query: Callable | None = None, _has_companion: bool = False,
@@ -142,15 +144,23 @@ class ToolRuntime:
                         result = {"ok": False, "code": "no_user_images", "error": "当前没有可裁剪的用户原图"}
                     else:
                         result, attachments = self.crop_user_image(args["source_id"], args["bbox"])
+                elif name == "reverse_image_search":
+                    if self.reverse_image_search is None:
+                        result = {"ok": False, "code": "image_search_unavailable", "error": "当前任务未初始化以图搜图"}
+                    else:
+                        notify = (lambda event: on_query({**event, "id": call.get("id", ""), "name": name,
+                                                          "provider": "yandex+google_lens+tineye", "search_mode": None})) if on_query else None
+                        result = self._batch([args], self.reverse_image_search,
+                                             "source_id" if "source_id" in args else "url", notify)
                 elif name == "send_process_intro":
                     with self._intro_lock:
                         if self._intro_sent and (not _has_reader or self._reader_intro_sent):
                             result = {"ok": False, "code": "intro_already_sent",
-                                      "error": "过程介绍已发送；仅在尚未告知读取计划时，可与 jina_read_url 同轮补充一次"}
+                                      "error": "过程介绍已发送；仅在尚未告知读取或以图搜图计划时，可与 jina_read_url 或 reverse_image_search 同轮补充一次"}
                         elif not _has_companion:
                             result = {"ok": False, "code": "companion_required",
                                       "error": "过程介绍须与有效的 " + "、".join(
-                                          tool for tool in ("web_search", "search_images", "jina_read_url")
+                                          tool for tool in ("web_search", "search_images", "jina_read_url", "reverse_image_search")
                                           if tool in self._validators) + " 调用同轮发送；Reader 仍须符合使用条件"}
                         else:
                             # Reserve before delivery: a failed callback may already have sent the message.
@@ -196,7 +206,7 @@ class ToolRuntime:
         results = [None] * len(calls)
         companions = {
             call["name"] for call in calls
-            if call.get("name") in self._validators and call["name"] in ("web_search", "search_images", "jina_read_url")
+            if call.get("name") in self._validators and call["name"] in ("web_search", "search_images", "jina_read_url", "reverse_image_search")
             and self._validators[call["name"]].is_valid(call.get("arguments"))
         }
         # Apply task settings serially before introductions/network work, never from worker threads.
@@ -212,7 +222,7 @@ class ToolRuntime:
                 continue
             if call.get("name") == "send_process_intro":
                 result = self.execute(call, _has_companion=bool(companions),
-                                      _has_reader="jina_read_url" in companions)
+                                      _has_reader=bool({"jina_read_url", "reverse_image_search"} & companions))
                 results[index] = result
                 if on_result:
                     on_result(result)

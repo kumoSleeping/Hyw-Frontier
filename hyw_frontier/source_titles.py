@@ -41,7 +41,7 @@ def source_titles(messages: list[dict]) -> dict[str, str]:
     for message in messages:
         name = message.get("toolName")
         if (message.get("role") != "toolResult" or message.get("isError")
-                or name not in {"web_search", "search_images", "jina_read_url"}):
+                or name not in {"web_search", "search_images", "jina_read_url", "reverse_image_search"}):
             continue
         content = message.get("content", [])
         if not content or content[0].get("type") != "text":
@@ -56,6 +56,8 @@ def source_titles(messages: list[dict]) -> dict[str, str]:
             if not batch.get("ok"):
                 continue
             rows = batch.get("results", []) if name in {"web_search", "search_images"} else [batch]
+            if name == "reverse_image_search":
+                rows = [source for match in batch.get("matches", []) for source in match.get("sources", [match])]
             for row in rows:
                 url = row.get("url", "")
                 if not url:

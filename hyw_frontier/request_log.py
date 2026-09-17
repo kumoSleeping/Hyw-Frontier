@@ -146,11 +146,11 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                 elif kind in ("text_delta", "thinking_delta") and event["round"] in rounds:
                     rounds[event["round"]].setdefault("first_" + kind + "_ms", ms)
                 elif kind == "query_start":
-                    searches[(event["id"], event["query_index"])] = {
+                    searches[(event.get("id", ""), event["query_index"])] = {
                         "round": event["round"], "query": event["query"], "start_ms": ms,
                         "provider": event.get("provider"), "search_mode": event.get("search_mode")}
                 elif kind == "query_end":
-                    row = searches.get((event["id"], event["query_index"]))
+                    row = searches.get((event.get("id", ""), event["query_index"]))
                     if row is not None:
                         row.update(end_ms=ms, duration_ms=event["duration_ms"], ok=event["ok"], cached=event.get("cached"))
         if summary is not None:
