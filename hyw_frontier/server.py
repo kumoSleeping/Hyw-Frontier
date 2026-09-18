@@ -143,6 +143,7 @@ class App:
                               "profile": "markdown-reading-v2",
                               "math": "ziamath-python",
                               "math_pipeline": "latex2mathml/ziamath/aggdraw",
+                              "math_currency_labels": "literal_parenthesized_dollar",
                               "math_external_runtime": False,
                               "math_font_fallback": "bundled_noto_babelstone",
                               "table_layout": "adaptive_columns_or_records",

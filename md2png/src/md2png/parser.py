@@ -6,10 +6,40 @@ from dataclasses import replace
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 from mdit_py_plugins.dollarmath import dollarmath_plugin
+from mdit_py_plugins.dollarmath.index import math_inline_dollar
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.texmath import texmath_plugin
 
 from .model import Block, Document, Inline, Limits, RenderError, Style
+
+
+def _parenthesized_currency(source: str, pos: int) -> bool:
+    """A standalone ($) or （$） is a currency label, not a math delimiter."""
+    left, right = pos - 1, pos + 1
+    while left >= 0 and source[left] in " \t":
+        left -= 1
+    while right < len(source) and source[right] in " \t":
+        right += 1
+    return (left >= 0 and right < len(source)
+            and (source[left], source[right]) in {("(", ")"), ("（", "）")})
+
+
+_dollar_math = math_inline_dollar(allow_space=False, allow_digits=False)
+
+
+def _currency_safe_dollar_math(state, silent: bool) -> bool:
+    start = state.pos
+    if state.src[start] != "$" or _parenthesized_currency(state.src, start):
+        return False
+    # Probe without emitting tokens: a currency symbol must not close an earlier
+    # dollar either. Restore the cursor on rejection, including silent link scans.
+    if not _dollar_math(state, True):
+        return False
+    end = state.pos
+    state.pos = start
+    if _parenthesized_currency(state.src, end - 1):
+        return False
+    return _dollar_math(state, silent)
 
 
 def parse(markdown: str, limits: Limits = Limits(), *, soft_breaks: bool = False) -> Document:
@@ -19,6 +49,7 @@ def parse(markdown: str, limits: Limits = Limits(), *, soft_breaks: bool = False
     md.enable(["table", "strikethrough"]).use(
         dollarmath_plugin, allow_space=False, allow_digits=False
     )
+    md.inline.ruler.at("math_inline", _currency_safe_dollar_math)
     md.use(texmath_plugin, delimiters="brackets")
     # Keep definitions even when unreferenced, and labels stable across summary parts.
     md.use(footnote_plugin, inline=False, move_to_end=False, always_match_refs=True)
