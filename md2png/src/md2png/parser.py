@@ -10,6 +10,7 @@ from mdit_py_plugins.dollarmath.index import math_inline_dollar
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.texmath import texmath_plugin
 
+from .cjk_emphasis import cjk_emphasis_plugin
 from .model import Block, Document, Inline, Limits, RenderError, Style
 
 
@@ -46,6 +47,7 @@ def parse(markdown: str, limits: Limits = Limits(), *, soft_breaks: bool = False
     if len(markdown) > limits.max_chars:
         raise RenderError(f"Markdown exceeds {limits.max_chars} characters")
     md = MarkdownIt("commonmark", {"html": False, "maxNesting": limits.max_depth + 1})
+    md.use(cjk_emphasis_plugin)
     md.enable(["table", "strikethrough"]).use(
         dollarmath_plugin, allow_space=False, allow_digits=False
     )

@@ -144,6 +144,7 @@ class App:
                           "raw_field": "text", "text_rendering": False},
                 "logging": {"enabled": True, "format": "jsonl"}, "reasoning": reasoning_config(),
                 "rendering": {"enabled": True, "engine": RENDER_ENGINE, "format": "png", "width": 840,
+                              "markdown_emphasis": "cjk_friendly_asterisk_v1",
                               "overflow_wrap": "break-word",
                               "profile": "markdown-reading-v2",
                               "math": "ziamath-python",
