@@ -23,8 +23,9 @@ PAGE_ENDPOINT = "https://r.jina.ai/"
 READER_ENGINE = "browser"
 READER_ENGINES = ('default', 'browser')
 READER_FORMAT = "markdown"
+PAGESHOT_FORMAT = "pageshot"
 READER_CONFIG = {"endpoint": PAGE_ENDPOINT, "engine": READER_ENGINE, "format": READER_FORMAT,
-                 "authentication": "anonymous"}
+                 "pageshot_format": PAGESHOT_FORMAT, "authentication": "anonymous"}
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
@@ -113,6 +114,46 @@ def request_json(endpoint: str, body: dict, headers: dict, *, provider: str = "J
         return result
     except (ValueError, UnicodeError):
         raise JinaError("invalid_response", f"{provider} 返回无效 JSON；不要将此响应作为证据") from None
+
+
+def request_pageshot_url(url: str, *, reader_engine: str = READER_ENGINE, opener=None) -> str:
+    """Request Jina's full-page screenshot and return the public image URL.
+
+    Hosted Reader answers pageshot requests with a redirect to the generated PNG.
+    Keep redirects disabled here so the signed image URL can be handed to the
+    bounded image fetcher instead of loading arbitrary binary data in this client.
+    """
+    body = json.dumps({"url": url}).encode()
+    headers = {"Content-Type": "application/json", "X-Return-Format": PAGESHOT_FORMAT}
+    if reader_engine != "default":
+        headers["X-Engine"] = reader_engine
+    request = Request(PAGE_ENDPOINT, data=body, headers=headers, method="POST")
+    client = opener if opener is not None else build_opener(NoRedirect)
+    try:
+        response = client.open(request, timeout=30)
+    except HTTPError as exc:
+        try:
+            if exc.code in (301, 302, 303, 307, 308):
+                location = exc.headers.get("Location")
+                if location:
+                    return public_url(location)
+            code = exc.code
+        finally:
+            exc.close()
+        advice = {
+            401: "认证失败，请检查密钥", 402: "额度不足，请检查账号余额",
+            403: "拒绝访问，请检查权限或换用可替代来源", 429: "限流，请稍后再试，不要立即重复检索",
+        }.get(code, "请检查网址或换用可替代来源；未自动重试")
+        raise JinaError(f"http_{code}", f"Jina Reader HTTP {code}：{advice}") from None
+    except (URLError, TimeoutError, OSError):
+        raise JinaError("network_error", "Jina Reader 整页截图请求失败或超时；未自动重试") from None
+    try:
+        location = response.headers.get("Location")
+        if response.status in (301, 302, 303, 307, 308) and location:
+            return public_url(location)
+        raise JinaError("invalid_response", "Jina Reader pageshot 未返回截图地址")
+    finally:
+        response.close()
 
 
 class JsonTransport:
@@ -254,3 +295,19 @@ class JinaClient:
             }
 
         return self._cached(f"reader:{url}", fetch)
+
+    def pageshot_url(self, item: dict) -> dict:
+        """Anonymous Reader full-page screenshot; binary download happens separately."""
+        url = public_url(item["url"])
+
+        def fetch():
+            payload = None
+            try:
+                with self._network_slots:
+                    image_url = request_pageshot_url(url, reader_engine=self.reader_engine)
+                return {"url": url, "image_url": image_url, "evidence_type": "pageshot",
+                        "untrusted_content": True}
+            finally:
+                self.costs.record("jina", "pageshot", payload, free=True)
+
+        return self._cached(f"pageshot:{url}", fetch)

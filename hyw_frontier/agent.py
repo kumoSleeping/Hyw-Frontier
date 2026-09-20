@@ -75,6 +75,7 @@ class SearchAgent:
         self.tools.set_reasoning = None
         self.tools.crop_user_image = None
         self.tools.reverse_image_search = None
+        self.tools.pageshots.close()
         if self._reverse_images is not None:
             self._reverse_images.close()
             self._reverse_images = None
@@ -115,8 +116,8 @@ class SearchAgent:
             for source in sources:
                 self._favicons.submit(source['url'])
         event_result = result
-        if result["toolName"] == "crop_user_image":
-            # User pixels belong in model history, not persisted debug logs or UI event JSON.
+        if result["toolName"] in ("crop_user_image", "jina_pageshot"):
+            # Image bytes belong in model history, not persisted debug logs or UI event JSON.
             event_result = {**result, "content": [
                 {**{key: value for key, value in block.items() if key != "data"},
                  "base64_length": len(block.get("data", ""))} if block.get("type") == "image" else block
@@ -159,6 +160,7 @@ class SearchAgent:
             self.tools.set_reasoning = None
             self.tools.crop_user_image = None
             self.tools.reverse_image_search = None
+            self.tools.pageshots.close()
             if self._reverse_images is not None:
                 self._reverse_images.close()
                 self._reverse_images = None
@@ -214,6 +216,8 @@ class SearchAgent:
                               max_reader_images=self.max_reader_images)
         self._media = media
         self.image_assets = media.assets
+        self.tools.pageshots.set_asset_sink(lambda url, raw: media.assets.__setitem__(url, raw))
+        self.tools.pageshots.set_image_budget(media.reserve_tool_image)
         media_enabled = (
             (provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp", "deepseek-v4.1-flash-expires-on-0910"))
             or (provider in ("google", "google-cloud", "google-vertex", "google-gla")

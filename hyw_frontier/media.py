@@ -17,7 +17,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from threading import Event
+from threading import Event, Lock
 import time
 import warnings
 from urllib.parse import parse_qs, urlsplit
@@ -26,6 +26,7 @@ from PIL import Image, ImageOps
 
 from .jina import JinaError, public_url
 from .media_fetch import MAX_BYTES as MAX_DOWNLOAD_BYTES
+from .media_refs import display_url, is_display_url
 from .prompt_files import read_prompt
 
 MAX_IMAGES = 600
@@ -46,7 +47,8 @@ MEDIA_CONFIG = {'enabled': True, 'max_images': MAX_IMAGES, 'max_images_per_round
                 'jpeg_quality': 75, 'max_image_bytes': MAX_JPEG_BYTES,
                 'discovery': 'search_images_reverse_image_matches_and_reader_image_links', 'compression': 'in_memory',
                 'reader_priority_images': READER_PRIORITY_IMAGES, 'unused_slots': 'shared',
-                'rendering': 'approved_bytes_only', 'attachment_binding': 'adjacent_id_url_label'}
+                'rendering': 'approved_bytes_only', 'attachment_binding': 'adjacent_id_display_url_label',
+                'display_url_scheme': 'hyw-media', 'budget_includes_pageshots': True}
 _URL = re.compile(r'''https?://[^\s<>"'`\[\]，。；！？、（）【】]+''')
 _MARKDOWN_IMAGE = re.compile(r'!\[([^\]\n]*)\]\(<?(https?://[^\s)>]+)>?(?:\s+"[^"]*")?\)')
 _ORIGINAL_LINK = re.compile(r'(?<!!)\[([^\]\n]*(?:查看原图|原图|Original file|下载|download)[^\]\n]*)\]\(<?(https?://[^\s)>]+)>?(?:\s+"[^"]*")?\)', re.I)
@@ -159,6 +161,7 @@ class ImagePipeline:
         self.reader_attempts: dict[str, int] = {}
         self.assets: dict[str, bytes] = {}
         self.seen: set[str] = set()
+        self._budget_lock = Lock()
         # Reuse previews within the request-selected tool budget. User images and
         # parsed chat records are separate; history replay never downloads again.
         for message in history:
@@ -166,19 +169,29 @@ class ImagePipeline:
                 continue
             content = message.get('content', [])
             try:
-                rows = json.loads(content[0]['text']).get('media_images', [])
+                data = json.loads(content[0]['text'])
+                rows = data.get('media_images', [])
+                # Older pageshot crops predate the shared media_images contract.
+                if not rows and message.get('toolName') == 'jina_pageshot' and data.get('display_url'):
+                    rows = [{**data, 'status': 'ready'}]
                 if message.get('toolName') == 'jina_read_url':
                     for row in rows:
                         page = row.get('source_url', '')
                         self.reader_attempts[page] = self.reader_attempts.get(page, 0) + 1
                 blocks = [b for b in content if b.get('type') == 'image']
                 for row, block in zip((r for r in rows if r.get('status') == 'ready'), blocks):
-                    url = public_url(row['url'])
+                    url = row.get('display_url') or public_url(row['url'])
+                    if not is_display_url(url):
+                        public_url(url)  # Validate legacy URLs without losing crop fragments.
                     data = block.get('data', '')
                     if (len(self.assets) < self.max_images and block.get('mimeType') == 'image/jpeg'
                             and len(data) <= 4 * ((MAX_JPEG_BYTES + 2) // 3)):
-                        self.assets[url] = base64.b64decode(data, validate=True)
-                        self.seen.add(url)
+                        raw = base64.b64decode(data, validate=True)
+                        if len(raw) > MAX_JPEG_BYTES:
+                            continue
+                        self.assets[url] = raw
+                        # Discovery still deduplicates by original URL, not display reference.
+                        self.seen.add(public_url(row['url']) if row.get('url') else url)
             except (ValueError, KeyError, TypeError, IndexError, JinaError):
                 continue
         history_count = sum(b.get('type') == 'image' for m in history if m.get('role') == 'toolResult'
@@ -186,6 +199,14 @@ class ImagePipeline:
         for index in range(max(0, history_count - len(self.seen))):
             self.seen.add(f'history-image:{index}')
         self.prepared = history_count
+
+    def reserve_tool_image(self) -> bool:
+        """Reserve a screenshot/crop attempt before parallel tool workers do work."""
+        with self._budget_lock:
+            if len(self.seen) >= self.max_images:
+                return False
+            self.seen.add(f'tool-image-attempt:{len(self.seen)}')
+            return True
 
     def close(self):
         self.assets.clear()
@@ -287,16 +308,19 @@ class ImagePipeline:
                     if raw is not None and not cancel.is_set():
                         try:
                             jpeg, (width, height) = compress(raw)
-                            self.assets[candidate.url] = jpeg
+                            reference = display_url(candidate.url, jpeg)
+                            self.assets[reference] = jpeg
                             new_images += 1
                             self.prepared += 1
-                            row.update(status='ready', image_id=f'image_{self.prepared}',
+                            row.update(status='ready', image_id=f'image_{self.prepared}', display_url=reference,
                                        attachment_order=new_images, width=width, height=height,
                                        orientation='landscape' if width > height else 'portrait' if height > width else 'square',
                                        bytes=len(jpeg), mimeType='image/jpeg')
                             image_blocks.setdefault(candidate.owner, []).extend([
                                 {'type': 'text', 'text': json.dumps({
-                                    'media_attachment': row['image_id'], 'url': candidate.url,
+                                    'media_attachment': row['image_id'], 'image_id': row['image_id'],
+                                    'display_url': reference, 'url': candidate.url,
+                                    'source_url': candidate.source_url, 'width': width, 'height': height,
                                     **({'engines': list(candidate.engines), 'source_urls': list(candidate.source_urls)}
                                        if candidate.engines else {})},
                                     ensure_ascii=False)},

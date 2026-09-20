@@ -152,6 +152,33 @@
     }
   },
   {
+    "name": "jina_pageshot",
+    "label": "整页截图",
+    "description": "使用 Jina Reader pageshot 获取网页完整滚动页面截图。第一次传 url，返回整页图片、pageshot_id 和附件像素尺寸；需要展示其中局部时，再传 pageshot_id 与 bbox 裁剪，裁剪结果通过 media_images 和相邻 media_attachment 返回内部展示标识 display_url，最终插图时原样复制；source_url 用于引用来源网页。截图和裁剪各占一次工具图片额度，需要展示局部时预留裁剪额度。整页附件仅供审阅，pageshot_id 仅在当前任务有效。仅在明显需要网页视觉布局或整页截图时使用",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string", "minLength": 8, "maxLength": 2000,
+          "description": "要抓取整页截图的公开网页地址；首次抓取时填写"
+        },
+        "pageshot_id": {
+          "type": "string", "minLength": 10, "maxLength": 100,
+          "description": "当前任务此前 jina_pageshot 返回的 pageshot_id；裁剪时填写"
+        },
+        "bbox": {
+          "type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 4, "maxItems": 4,
+          "description": "pageshot_attachment 附件像素坐标 [left, top, right, bottom]，右下边界不包含"
+        }
+      },
+      "oneOf": [
+        {"required": ["url"], "not": {"anyOf": [{"required": ["pageshot_id"]}, {"required": ["bbox"]}]}},
+        {"required": ["pageshot_id", "bbox"], "not": {"required": ["url"]}}
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "jina_read_url",
     "description": "读取网页或 PDF，返回正文和来源链接",
     "parameters": {

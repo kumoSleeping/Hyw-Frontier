@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from .ddgs import DDGSClient
 from .jina import JinaClient, JinaError
 from .parallel import ParallelClient, SEARCH_MODE
+from .pageshot import PageshotStore
 from .reverse_image import ENGINES
 
 SEARCH_PROVIDER = "parallel"
@@ -55,6 +56,7 @@ class ToolRuntime:
         self.crop_user_image: Callable[[str, list[int]], tuple[dict, list[dict]]] | None = None
         self.reverse_image_search: Callable[[dict], dict] | None = None
         self.jina = jina
+        self.pageshots = PageshotStore(jina)
         self.search_provider = search_provider
         self.definitions = tool_definitions(search_provider)
         self._validators = {tool["name"]: Draft202012Validator(tool["parameters"], format_checker=FormatChecker())
@@ -84,6 +86,7 @@ class ToolRuntime:
         self.crop_user_image = None
         self.reverse_image_search = None
         self.set_reasoning = None
+        self.pageshots.close()
         try:
             self.jina.close()
         finally:
@@ -158,11 +161,11 @@ class ToolRuntime:
                     with self._intro_lock:
                         if self._intro_sent and (not _has_reader or self._reader_intro_sent):
                             result = {"ok": False, "code": "intro_already_sent",
-                                      "error": "过程介绍已发送；仅在尚未告知读取或以图搜图计划时，可与 jina_read_url 或 reverse_image_search 同轮补充一次"}
+                                      "error": "过程介绍已发送；仅在尚未告知读取、整页截图或以图搜图计划时，可与 jina_read_url、jina_pageshot 或 reverse_image_search 同轮补充一次"}
                         elif not _has_companion:
                             result = {"ok": False, "code": "companion_required",
                                       "error": "过程介绍须与有效的 " + "、".join(
-                                          tool for tool in ("web_search", "search_images", "jina_read_url", "reverse_image_search")
+                                          tool for tool in ("web_search", "search_images", "jina_read_url", "jina_pageshot", "reverse_image_search")
                                           if tool in self._validators) + " 调用同轮发送；Reader 仍须符合使用条件"}
                         else:
                             # Reserve before delivery: a failed callback may already have sent the message.
@@ -192,6 +195,8 @@ class ToolRuntime:
                     notify = (lambda event: on_query({**event, "id": call.get("id", ""), "name": name,
                                                       "provider": "jina", "search_mode": None})) if on_query else None
                     result = self._batch([args], self.jina.read_url, "url", notify)
+                elif name == "jina_pageshot":
+                    result, attachments = self.pageshots.run(args)
                 else:
                     result = {"ok": False, "code": "unknown_tool", "error": "工具未实现"}
         except Exception:
@@ -210,7 +215,7 @@ class ToolRuntime:
         results = [None] * len(calls)
         companions = {
             call["name"] for call in calls
-            if call.get("name") in self._validators and call["name"] in ("web_search", "search_images", "jina_read_url", "reverse_image_search")
+            if call.get("name") in self._validators and call["name"] in ("web_search", "search_images", "jina_read_url", "jina_pageshot", "reverse_image_search")
             and self._validators[call["name"]].is_valid(call.get("arguments"))
         }
         # Apply task settings serially before introductions/network work, never from worker threads.
@@ -226,7 +231,7 @@ class ToolRuntime:
                 continue
             if call.get("name") == "send_process_intro":
                 result = self.execute(call, _has_companion=bool(companions),
-                                      _has_reader=bool({"jina_read_url", "reverse_image_search"} & companions))
+                                      _has_reader=bool({"jina_read_url", "jina_pageshot", "reverse_image_search"} & companions))
                 results[index] = result
                 if on_result:
                     on_result(result)

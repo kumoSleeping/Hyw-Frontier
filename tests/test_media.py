@@ -1,4 +1,6 @@
 import json
+import base64
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from threading import Barrier, Event, Lock
 import unittest
@@ -6,7 +8,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from hyw_frontier.media import ImagePipeline
+from hyw_frontier.media import ImagePipeline, compress
+from hyw_frontier.media_refs import is_display_url
 
 
 def reader_result(count, start=0):
@@ -57,6 +60,9 @@ class MediaBatchTests(unittest.TestCase):
         self.assertTrue(all(row['status'] == 'ready' for row in rows))
         for row, marker, block in zip(rows, result['content'][1::2], result['content'][2::2]):
             self.assertEqual(json.loads(marker['text'])['url'], row['url'])
+            self.assertEqual(json.loads(marker['text'])['display_url'], row['display_url'])
+            self.assertTrue(is_display_url(row['display_url']))
+            self.assertEqual(self.pipeline.assets[row['display_url']], base64.b64decode(block['data']))
             self.assertEqual(block['type'], 'image')
         self.assertIsNone(events[-1]['round_limit'])
 
@@ -87,9 +93,42 @@ class MediaBatchTests(unittest.TestCase):
         result['role'] = 'toolResult'
         history = ImagePipeline([result])
         self.addCleanup(history.close)
+        self.assertEqual(history.assets, self.pipeline.assets)
         with patch('hyw_frontier.media.download') as fetch:
             history.prepare([reader_result(20, start=1)], Event(), lambda _: None)
             fetch.assert_not_called()
+
+    def test_parallel_pageshots_share_budget_with_reader_downloads(self):
+        pipeline = ImagePipeline(max_images=3)
+        self.addCleanup(pipeline.close)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            self.assertEqual(sum(pool.map(lambda _: pipeline.reserve_tool_image(), range(8))), 3)
+        with patch('hyw_frontier.media.download') as fetch:
+            pipeline.prepare([reader_result(2)], Event(), lambda _: None)
+            fetch.assert_not_called()
+
+    def test_reader_attempts_leave_only_remaining_slots_for_pageshots(self):
+        pipeline = ImagePipeline(max_images=3)
+        self.addCleanup(pipeline.close)
+        with patch('hyw_frontier.media.download', side_effect=lambda c, cancel, timeout:
+                   (c, self.raw, 'downloaded', 1)):
+            pipeline.prepare([reader_result(2)], Event(), lambda _: None)
+        self.assertTrue(pipeline.reserve_tool_image())
+        self.assertFalse(pipeline.reserve_tool_image())
+
+    def test_legacy_reader_and_crop_history_preserves_exact_urls(self):
+        original = 'https://example.com/image.jpg'
+        crop = 'https://example.com/article#hyw-pageshot-crop=abc123'
+        raw, _ = compress(self.raw)
+        encoded = base64.b64encode(raw).decode()
+        history = [{'role': 'toolResult', 'toolName': name, 'content': [
+            {'type': 'text', 'text': json.dumps(data)},
+            {'type': 'image', 'mimeType': 'image/jpeg', 'data': encoded}]} for name, data in (
+                ('jina_read_url', {'media_images': [{'status': 'ready', 'url': original}]}),
+                ('jina_pageshot', {'ok': True, 'display_url': crop}))]
+        pipeline = ImagePipeline(history)
+        self.addCleanup(pipeline.close)
+        self.assertEqual(pipeline.assets, {original: raw, crop: raw})
 
     def test_cancellation_stops_before_next_batch(self):
         cancel = Event()

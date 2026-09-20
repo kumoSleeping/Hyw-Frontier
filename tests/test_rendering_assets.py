@@ -12,6 +12,7 @@ from md2png.model import Limits, RenderError as EngineError
 from hyw_frontier.api import answer
 from hyw_frontier.pillow_card import adapt_answer, parse_protocol, referenced_assets
 from hyw_frontier.rendering import CardRenderer, RenderError, engine_error_code, png_size
+from hyw_frontier.media_refs import display_url
 
 
 def jpeg(size=(96, 80), color='orange'):
@@ -35,6 +36,24 @@ class AssetSelectionTests(unittest.TestCase):
         self.assertEqual(images, {selected: b'a', nested: b'b'})
         self.assertEqual(icons, {'https://example.com': b'icon'})
         self.assertEqual(len(pool), 4)
+
+    def test_pageshot_crop_display_url_can_select_registered_asset(self):
+        display_url = 'https://example.com/article#hyw-pageshot-crop=abc123'
+        pool = {display_url: b'crop-bytes'}
+        text = f'<final_response>\n# 截图\n\n![页面局部]({display_url})\n</final_response>'
+        doc = adapt_answer(parse_protocol(text), {}, Limits(), reading=True, image_urls=set(pool))
+        images, _ = referenced_assets(doc, pool, {})
+        self.assertEqual(images, pool)
+
+    def test_internal_images_use_only_registered_bytes_and_are_not_source_links(self):
+        known = display_url('one', b'a')
+        unknown = display_url('two', b'b')
+        text = (f'<final_response>\n# 图\n\n![已审阅]({known})\n\n![未知]({unknown})\n\n'
+                f'[内部地址]({known})\n\n[来源](https://example.com/article)\n</final_response>')
+        doc = adapt_answer(parse_protocol(text), {}, Limits(), reading=True, image_urls={known})
+        images, _ = referenced_assets(doc, {known: b'a'}, {})
+        self.assertEqual(images, {known: b'a'})
+        self.assertEqual([r.url for r in doc.references], ['https://example.com/article'])
 
     def test_specific_safe_error_codes(self):
         cases = {'Asset count budget exceeded': 'render_asset_limit',
@@ -79,6 +98,21 @@ class RenderAssetIntegrationTests(unittest.TestCase):
                 self.assertEqual(result.diagnostics[0]['available_images'], count)
                 self.assertGreater(png_size(result.png)[1], 0)
         self.assertEqual(len(pool), 600)
+
+    def test_pageshot_crop_fragment_url_renders_as_final_reply_image(self):
+        display_url = 'https://example.com/article#hyw-pageshot-crop=abc123'
+        text = f'<final_response>\n# 截图\n\n![页面局部]({display_url})\n</final_response>'
+        result = self.render(text, {display_url: self.raw})
+        self.assertEqual(result.diagnostics[0]['selected_images'], 1)
+        self.assertTrue(result.png)
+
+    def test_internal_display_reference_renders_without_exposing_a_source_link(self):
+        reference = display_url('https://example.com/original.jpg', self.raw)
+        text = f'<final_response>\n# 配图\n\n![图片]({reference})\n</final_response>'
+        result = self.render(text, {reference: self.raw})
+        self.assertEqual(result.diagnostics[0]['selected_images'], 1)
+        self.assertTrue(result.png)
+        self.assertFalse(result.links)
 
     def test_no_selected_images_and_unused_invalid_assets_do_not_block_text_card(self):
         text = '<final_response>\n# 文字卡片\n\n完整正文。\n</final_response>'

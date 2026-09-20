@@ -14,6 +14,7 @@ from md2png.parser import parse
 
 from .render_protocol import parse_answer as parse_protocol
 from .source_titles import source_key
+from .media_refs import is_display_url
 
 __all__ = ["adapt_answer", "parse_protocol"]
 
@@ -64,14 +65,15 @@ def adapt_answer(parsed: dict, metadata: dict, limits: Limits, *, reading: bool 
         identifier = f'answer:{counter}'
         inlines = []
         for span in block.inlines:
-            link = safe_url(span.target if span.kind == 'image' else span.style.link)
+            internal = span.kind == 'image' and is_display_url(span.target)
+            link = span.target if internal else safe_url(span.target if span.kind == 'image' else span.style.link)
             # Only standalone pictures with reviewed bytes may become image blocks.
             # Unknown/data/file URLs and inline pictures never trigger network requests.
             if span.kind == 'image':
                 if block.kind == 'gallery' and link in image_urls:
-                    span = replace(span, target=link, style=replace(span.style, link=link))
+                    span = replace(span, target=link, style=replace(span.style, link='' if internal else link))
                 else:
-                    span = Inline(span.text or '图片链接', Style(link=link))
+                    span = Inline(span.text or '图片链接', Style(link='' if internal else link))
             elif span.style.link:
                 span = replace(span, style=replace(span.style, link=link))
             inlines.extend(linked_spans(span))

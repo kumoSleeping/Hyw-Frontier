@@ -136,6 +136,7 @@ async function submit(event) {
     else if (item.type === "tool_start" && item.name === "crop_user_image") status("正在裁剪用户图片…");
     else if (item.type === "tool_start" && item.name === "reverse_image_search") status("正在以图搜图…");
     else if (item.type === "tool_start" && item.name === "jina_read_url") status("正在读取网页…");
+    else if (item.type === "tool_start" && item.name === "jina_pageshot") status("正在获取整页截图…");
     else if (item.type === "render_start") status("正在生成图片…");
     else if (item.type === "done") {
       terminal = true;
