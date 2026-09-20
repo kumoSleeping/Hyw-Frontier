@@ -12,11 +12,12 @@ from .jina import JinaClient
 from .image_crop import UserImageCrops
 from .reverse_image import ReverseImageSearch
 from .favicons import FaviconPipeline
-from .media import ImagePipeline, MAX_IMAGES, MAX_IMAGES_PER_ROUND
+from .media import ImagePipeline, MAX_IMAGES, MAX_IMAGES_PER_ROUND, DOWNLOAD_CONCURRENCY, MAX_READER_IMAGES
 from .reasoning import RECONSIDER_PROMPT, needs_reconsideration, resolve_reasoning, resolve_reasoning_mode
 from .runtime import Bridge, DEFAULT_MODEL
 from .parallel import SEARCH_MODE, SEARCH_MODES
 from .tools import DISABLED_TOOLS, SEARCH_PROVIDER, SEARCH_PROVIDERS, ToolRuntime
+from .prompt_files import read_prompt
 
 
 class AgentLimitError(RuntimeError):
@@ -27,12 +28,16 @@ class SearchAgent:
     def __init__(self, bridge, tools: ToolRuntime | None = None, *, max_rounds: int = 30, max_calls: int | None = None,
                  on_event: Callable | None = None, cancel_event: Event | None = None, reasoning: dict[str, str] | None = None,
                  reasoning_mode: str = "auto", search_mode: str = SEARCH_MODE, search_provider: str = SEARCH_PROVIDER,
-                 prefetch_icons: bool = True, max_tool_images: int = MAX_IMAGES):
+                 prefetch_icons: bool = True, max_tool_images: int = MAX_IMAGES,
+                 max_reader_images: int = MAX_READER_IMAGES, reader_engine: str = 'browser'):
         if type(max_rounds) is not int or max_rounds < 1:
             raise ValueError("Invalid agent budget")
         if type(max_tool_images) is not int or max_tool_images < 0:
             raise ValueError('max_tool_images must be a non-negative integer')
         self.max_tool_images = max_tool_images
+        if type(max_reader_images) is not int or max_reader_images < 0:
+            raise ValueError('max_reader_images must be a non-negative integer')
+        self.max_reader_images = max_reader_images
         if max_calls is None:
             max_calls = max_rounds * 8  # No hidden 24-call cap before the user-selected round budget.
         if type(max_calls) is not int or max_calls < 1:
@@ -44,7 +49,7 @@ class SearchAgent:
         self.bridge = bridge
         self._owns_tools = tools is None
         self.tools = tools if tools is not None else ToolRuntime(
-            JinaClient(bridge.home), search_mode=search_mode, search_provider=search_provider)
+            JinaClient(bridge.home, reader_engine=reader_engine), search_mode=search_mode, search_provider=search_provider)
         self.max_rounds, self.max_calls = max_rounds, max_calls
         self.context: dict | None = None
         self.image_assets: dict[str, bytes] = {}
@@ -186,9 +191,11 @@ class SearchAgent:
         self.context = deepcopy(context)
         if not self.context["systemPrompt"].strip():
             raise AgentLimitError("系统提示词不能为空。")
-        base_prompt = (self.context["systemPrompt"] +
-                       f'\n\n本次工具图片预算：每轮最多{MAX_IMAGES_PER_ROUND}张，总共最多{self.max_tool_images}张；'
-                       '仅约束搜索/Reader 图片，不计用户附件和聊天记录图片。')
+        base_prompt = self.context['systemPrompt'] + '\n\n' + read_prompt(
+            'image_budget.md', download_concurrency=DOWNLOAD_CONCURRENCY, max_tool_images=self.max_tool_images,
+            max_reader_images=self.max_reader_images)
+        round_limit_prompt = read_prompt('round_limit.md')
+        warning_round = max(1, self.max_rounds - 2)
         self.context["systemPrompt"] = base_prompt
         self.on_event({"type": "effective_prompt", "system_prompt": base_prompt})
         self._check_cancelled()
@@ -203,11 +210,12 @@ class SearchAgent:
         self.context["tools"] = [tool for tool in self.tools.definitions if tool["name"] in requested
                                  and (tool["name"] != "crop_user_image" or crops.originals)
                                  and (tool["name"] != "set_reasoning" or self.tools.set_reasoning is not None)]
-        media = ImagePipeline(self.context["messages"], max_images=self.max_tool_images)
+        media = ImagePipeline(self.context["messages"], max_images=self.max_tool_images,
+                              max_reader_images=self.max_reader_images)
         self._media = media
         self.image_assets = media.assets
         media_enabled = (
-            (provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp"))
+            (provider == "deepseek" and model in (DEFAULT_MODEL, "deepseek-v4-flash-vision-exp", "deepseek-v4.1-flash-expires-on-0910"))
             or (provider in ("google", "google-cloud", "google-vertex", "google-gla")
                 and model.removeprefix("models/") == "gemini-3.8-flash")
         )
@@ -230,6 +238,11 @@ class SearchAgent:
             # Only the first request after a change gets the reminder; never rewrite
             # the shared/session prompt or accumulate it in conversation messages.
             prompt = f"{base_prompt}\n\n{RECONSIDER_PROMPT}" if reconsider else base_prompt
+            if round_number >= warning_round:
+                prompt += '\n\n' + round_limit_prompt
+            if round_number == warning_round:
+                self.on_event({'type': 'round_limit_warning', 'round': round_number,
+                               'max_rounds': self.max_rounds, 'text': round_limit_prompt})
             if prompt != self.context["systemPrompt"]:
                 self.context["systemPrompt"] = prompt
                 self.on_event({"type": "effective_prompt", "round": round_number,
@@ -238,18 +251,24 @@ class SearchAgent:
                 self._favicons.reset_stream()
             started = time.monotonic()
             times = {"model_ms": 0, "tool_ms": 0, "media_download_ms": 0, "image_processing_ms": 0}
+            page_timings = {}
+
+            def query_event(event):
+                if event['type'] == 'query_end' and event['name'] == 'jina_read_url':
+                    page_timings[event['id']] = {'reader_ms': event['duration_ms']}
+                self.on_event({**event, 'round': round_number})
             images_sent = image_count()
             def emit_timing(phase, complete=False):
                 self.on_event({"type": "round_timing", "round": round_number, "phase": phase,
                                "complete": complete, "total_ms": round((time.monotonic() - started) * 1000, 2),
                                **{key: round(value, 2) for key, value in times.items()},
                                "images_sent": images_sent, "image_budget": self.max_tool_images,
-                               "image_round_budget": MAX_IMAGES_PER_ROUND})
+                               "image_round_budget": MAX_IMAGES_PER_ROUND, "image_page_budget": self.max_reader_images})
             try:
                 self.on_event({"type": "model_start", "round": round_number, **settings,
                                "reasoning_reconsider": reconsider,
                                "images_sent": images_sent, "new_images_sent": images_sent - previously_sent,
-                               "image_budget": self.max_tool_images, "image_round_budget": MAX_IMAGES_PER_ROUND})
+                               "image_budget": self.max_tool_images, "image_round_budget": MAX_IMAGES_PER_ROUND, "image_page_budget": self.max_reader_images})
                 previously_sent = images_sent
                 request = {"command": "stream" if self.streaming else "complete",
                            "provider": provider, "model": model, "context": self.context, **settings}
@@ -286,18 +305,32 @@ class SearchAgent:
                                        "arguments": call["arguments"]})
                     results = self.tools.execute_many(
                         calls, on_result=lambda result: self._tool_finished(result, round_number),
-                        on_query=lambda event: self.on_event({**event, "round": round_number}))
+                        on_query=query_event)
                 finally:
                     times["tool_ms"] += (time.monotonic() - tools_started) * 1000
                     emit_timing("tools")
                 self._check_cancelled()
                 if media_enabled:
-                    media_times = media.prepare(results, self.cancel_event or Event(),
-                                                lambda event: self.on_event({**event, "round": round_number}))
-                    times["media_download_ms"] = media_times["download_ms"]
-                    times["image_processing_ms"] = media_times["processing_ms"]
-                    times["tool_ms"] += media_times["download_ms"]
-                    times["model_ms"] += media_times["processing_ms"]
+                    readers = [r for r in results if r['toolName'] == 'jina_read_url']
+                    others = [r for r in results if r['toolName'] != 'jina_read_url']
+                    groups = [[r] for r in readers] + ([others] if others else [])
+                    by_id = {call['id']: call['arguments'] for call in calls}
+                    for group in groups:
+                        self._check_cancelled()
+                        media_times = media.prepare(group, self.cancel_event or Event(),
+                            lambda event: self.on_event({**event, 'round': round_number}))
+                        times['media_download_ms'] += media_times['download_ms']
+                        times['image_processing_ms'] += media_times['processing_ms']
+                        times['tool_ms'] += media_times['download_ms']
+                        times['model_ms'] += media_times['processing_ms']
+                        if group[0]['toolName'] == 'jina_read_url':
+                            result = group[0]
+                            self.on_event({'type': 'page_timing', 'round': round_number,
+                                'id': result['toolCallId'], 'url': by_id[result['toolCallId']]['url'],
+                                **page_timings.get(result['toolCallId'], {}),
+                                'download_ms': media_times['download_ms'], 'processing_ms': media_times['processing_ms'],
+                                'images': media_times['new_images'], 'max_reader_images': self.max_reader_images,
+                                'status': 'failed' if result.get('isError') else 'ok'})
                 self._check_cancelled()
                 self.context["messages"].extend(results)
                 calls_used += len(calls)

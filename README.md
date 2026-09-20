@@ -187,8 +187,12 @@ Hyw Frontier 是 Python 原生的检索问答核心：负责提示词、模型�
 | `jina` | Jina SVIP | Jina SVIP | `JINA_API_KEY` |
 | `ddgs` | DDGS | DDGS | 无需搜索 API Key |
 
-`search_mode` 仅对 Parallel 生效，可选 `turbo`、`fast`、`basic`、`advanced`。无论选择哪个搜索服务，网页读取工具 `jina_read_url` 仍使用匿名 Jina Reader。
+`search_mode` 仅对 Parallel 生效，可选 `turbo`、`fast`、`basic`、`advanced`。无论选择哪个搜索服务，网页读取工具 `jina_read_url` 均使用匿名 Jina Reader，默认发送 `X-Engine: browser` 和 `X-Respond-With: markdown`，由 Jina 的浏览器执行网页 JavaScript 后提取正文。使用 `POST https://r.jina.ai/` 和 JSON 请求体 `{"url": "目标网址"}`，以 JSON 的 `data.content` 接收完整页面 Markdown 正文；不要求 API Key。本地调试服务的 `/api/config` 中 `reader` 字段公开当前引擎和认证方式。
 
 密钥放在环境变量，或 `home` 目录中的 `parallel.json` / `jina.json`（字段为 `api_key`），不要写入源码或 README。搜索凭据与模型凭据相互独立。
 
+网页直接返回 Markdown。`reader_engine="default"` 使用 Jina 默认引擎，`"browser"`（默认）强制浏览器；`max_reader_images=30` 控制单页面图片尝试上限，可设为非负整数，0禁用新增网页图片。本地测试页可调整上限、切换引擎并查看逐页耗时；整次提问仍默认最多尝试600张工具图片，同时最多下载20张。
+
 **接入新的搜索服务**：参考 `hyw_frontier/parallel.py`、`jina.py` 或 `ddgs.py` 实现客户端，在 `hyw_frontier/tools.py` 的 `SEARCH_PROVIDERS` 和 `ToolRuntime` 中注册、选择和释放资源；同步调整 `hyw_frontier/tools.json` 的工具参数及服务适用范围。若需在本地网页正确显示名称、模式和凭据提示，同步更新 `hyw_frontier/static/settings.js`。公共 `answer()` 当前没有任意搜索客户端注入参数，`model` / `backend` 注入只替换模型层，不替换搜索服务。
+
+提示词统一目录为 `hyw_frontier/prompts/`，包含主模型、图片说明及临近轮次上限提醒。文件用途、注入时机和仍保留在代码中的协议内容见 [提示词审计](docs/prompt-audit.md)。

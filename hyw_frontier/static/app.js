@@ -64,7 +64,7 @@ function status(text, error = false) {
 
 function setBusy(value) {
   busy = value;
-  for (const id of ["model", "rounds", "search-provider", "search-mode", "new-chat", "message", "send"]) {
+  for (const id of ["model", "rounds", "search-provider", "search-mode", "max-reader-images", "reader-engine", "new-chat", "message", "send"]) {
     $(id).disabled = value || !initialized;
   }
   imageInput.setDisabled(value || !initialized);
@@ -103,11 +103,14 @@ async function submit(event) {
   if (!selectedModel) return status("没有可用的已配置模型，请检查后端配置并刷新页面", true);
   const maxRounds = Number($("rounds").value);
   if (!Number.isSafeInteger(maxRounds) || maxRounds < 1) return status("模型轮次安全阈值必须是正整数", true);
+  const maxReaderImages = Number($("max-reader-images").value);
+  if (!$("max-reader-images").value.trim() || !Number.isSafeInteger(maxReaderImages) || maxReaderImages < 0) return status("单页面图片上限必须是非负整数", true);
   setBusy(true); imageResult.clear(); processIntro.clear(); searchProgress.clear();
   document.querySelector("main").classList.add("has-result");
   const request = {
     session, message: text, images, provider: selectedModel.provider, model: selectedModel.model, max_rounds: maxRounds,
     ...searchControl.requestSettings(), ...reasoningControl.requestSettings(),
+    max_reader_images: maxReaderImages, reader_engine: $('reader-engine').value,
   };
   const inspection = createInspection($("debug"), null, () => {
     inspection.body.scrollTop = inspection.body.scrollHeight;
@@ -219,6 +222,25 @@ window.addEventListener("pagehide", () => { imageResult.clear(); imageInput.clea
     searchControl = createSearchProviderControl({ select: $("search-provider"), modeSelect: $("search-mode"),
       hint: $("search-hint"), config: config.search, storage });
     $("prompt").textContent = config.system_prompt;
+    for (const [id, field] of [['reader-engine', 'engine']]) {
+      let saved;
+      try { saved = localStorage.getItem(`frontier.${id}`); } catch { /* Use server default. */ }
+      $(id).value = [...$(id).options].some(option => option.value === saved) ? saved : config.reader[field];
+      $(id).addEventListener('change', () => {
+        try { localStorage.setItem(`frontier.${id}`, $(id).value); } catch { /* Keep page choice. */ }
+      });
+    }
+    const pageLimit = $('max-reader-images');
+    let savedPageLimit = null;
+    try { savedPageLimit = localStorage.getItem('frontier.max-reader-images'); } catch { /* Use server default. */ }
+    const limit = savedPageLimit === null || !savedPageLimit.trim() ? NaN : Number(savedPageLimit);
+    pageLimit.value = Number.isSafeInteger(limit) && limit >= 0 ? limit : config.reader.max_reader_images;
+    pageLimit.addEventListener('change', () => {
+      const value = Number(pageLimit.value);
+      if (pageLimit.value.trim() && Number.isSafeInteger(value) && value >= 0) {
+        try { localStorage.setItem('frontier.max-reader-images', String(value)); } catch { /* Keep page choice. */ }
+      }
+    });
     $("credentials").textContent = `${modelOptions.length} 个已配置模型 / Jina ${config.credentials.jina ? "已配置" : "未配置"} / Parallel ${config.credentials.parallel ? "已配置" : "未配置"} / DDGS 无需密钥`;
     await newChat();
     initialized = true; setBusy(false); $("message").focus();

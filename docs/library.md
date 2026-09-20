@@ -75,7 +75,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`search_provider` 支持 `"parallel"`（默认）、`"jina"` 和 `"ddgs"`。Parallel 的 `search_mode` 可选 `"turbo"`（默认）、`"fast"`、`"basic"`、`"advanced"`；Jina/DDGS 不使用该模式。网页搜索按所选服务执行，所有搜索服务均开放 `search_images`：DDGS 模式使用免密钥的 `ddgs>=9.16,<10` 进行网页和图片搜索，自动选择引擎，每次查询最多10条；其他模式图片搜索使用 `https://svip.jina.ai/` 和原有 Jina 凭据，缺少该凭据时不影响 Parallel 网页搜索。选择 Jina 时网页搜索也使用该 SVIP 端点；Reader 始终使用匿名 Jina 标准接口。图片搜索沿用下述图片下载与审阅预算。
+`search_provider` 支持 `"parallel"`（默认）、`"jina"` 和 `"ddgs"`。Parallel 的 `search_mode` 可选 `"turbo"`（默认）、`"fast"`、`"basic"`、`"advanced"`；Jina/DDGS 不使用该模式。网页搜索按所选服务执行，所有搜索服务均开放 `search_images`：DDGS 模式使用免密钥的 `ddgs>=9.16,<10` 进行网页和图片搜索，自动选择引擎，每次查询最多10条；其他模式图片搜索使用 `https://svip.jina.ai/` 和原有 Jina 凭据，缺少该凭据时不影响 Parallel 网页搜索。选择 Jina 时网页搜索也使用该 SVIP 端点；Reader 始终使用匿名 Jina 接口，默认发送 `X-Engine: browser` 强制浏览器渲染、`X-Respond-With: markdown` 返回完整页面 Markdown 正文（包括以图搜图的 Reader 调用），无须 API Key；调试服务 `/api/config` 的 `reader.engine` 为 `browser`、`reader.format` 为 `markdown`。图片搜索沿用下述图片下载与审阅预算。
 
 DDGS 示例：`await answer("富士山的介绍与图片", search_provider="ddgs")`。无需配置 Jina/Parallel 密钥；需要代理时可设置上游支持的 `DDGS_PROXY`。DDGS 网页工具支持 `location`（映射为地区默认语言区域，省略为 `us-en`）及 `timelimit: d/w/m/y`（一天／一周／一个月／一年），不接受 `after_date`；其他服务仍使用 `after_date`。引擎对地区和时间筛选支持不同，结果需核对来源。搜索成功、空结果及失败均在本任务内缓存，DDGS 自身可能尝试多个引擎，费用记录标为无 API 费用。
 
@@ -153,15 +153,25 @@ print("本次实际合计（USD）：", result.costs.total_usd)
 
 上限为文本 UTF-8（含当前问题）加图片解码后字节合计256 MiB、32768个块；单图仍校验格式及5 MiB上限，但不限制为4张，不占工具图片预算。超过时核心明确拒绝，不静默删除；聊天插件负责下载压缩、按原顺序截断、保留失败图片标识及提示。机器人在压缩前允许单张原图最多20 MiB（公开链接与内联图片一致）。普通 `images=`、网页粘贴接口的4张/10 MiB限制不变。256 MiB不是提供商的接收承诺，模型请求大小、图片数量、token上下文限制仍适用。
 
+## 网页直接阅读
+
+`answer(..., reader_engine="browser", max_reader_images=30)` 直接将网页 Markdown 和压缩图片交给主模型。`reader_engine="default"` 不传引擎覆盖头；`"browser"` 强制浏览器，两种引擎均返回 Markdown。本地测试页可切换引擎、调整单页图片上限，并展示读取、图片下载和压缩耗时。
+
+`max_reader_images` 是每个 `jina_read_url` 页面尝试下载图片的上限，默认30，接受非负整数，0禁用新增网页图片。按现有候选发现顺序选取（原图链接优先，再按 Markdown 图片等顺序）；URL 去重后计数，下载失败或低分辨率过滤也占尝试额度，不补位。相同页面在本次请求中重复读取共享该上限；历史已有图片不删除，已记录的该页尝试数也占额度。超出上限的链接仍在完整 Markdown 中，不下载为附件。该限制不限制搜索或以图搜图结果数量。
+
+核心 `answer()`、`Bridge.ask()`、`SearchAgent`、CLI `ask --max-reader-images`、网页 `/api/chat` 与 Entari 同名配置均支持。提示词位于 `hyw_frontier/prompts/`，用途与注入时机见 [提示词审计](prompt-audit.md)。
+
 ## 搜索图片
 
 `reverse_image_search` 按需进行混合以图搜图：原图 `source_id`、成功裁剪返回的 `crop_id`（填入 `source_id`），或公开 HTTPS 图片 `url`；`source_id` 与 `url` 二选一，上传一次后并行通过三个匿名 Jina Reader 查询 Yandex、Google Lens `/upload`、TinEye。`sources` 始终保留三个引擎的名称、状态、完整 Reader 正文和 `match_ids`，一个失败不影响其他来源；`matches` 按相同图片 URL（无图片时按页面 URL）合并，保留全部 `engines`、来源关联及 `duplicate_count`。结果按引擎轮流排列，避免一个来源占满图片预算。不做视觉相似度去重，不把验证页当成空匹配。可选 `page` 仅控制 TinEye，其他两个来源复用任务内缓存。图片沿用统一压缩、下载预算及取消机制，硬超时 5 秒（普通搜图 2.5 秒）；不下载 blob 缩略图，失败仍保留文字。只有调用才上传，同图链接跨历史消息复用到失效；图床单张上限 5 MiB，按北京时间每天 00:00 过期，午夜前最后 60 秒不接受新上传。
 
 图床地址及上传密钥通过本机设置保存到应用 home 下的 `image-bridge.json`（默认 `~/.hyw-frontier/image-bridge.json`，权限 0600）。仓库仅包含通用 Worker 模板，使用 Cloudflare secret `UPLOAD_TOKEN`，不含个人部署地址、KV ID 或真实密钥。未配置时明确报错，无默认个人服务。`/api/config` 仅公开配置状态；图床设置读写需要本机页面鉴权，读取也不返回密钥，空密钥只在地址不变时保留旧值。公网图片 URL 必须传给搜索引擎并返回给模型；请勿把包含个人图片链接的本地日志或测试报告纳入公开仓库。
 
-`answer(..., max_tool_images=600)` 可逐请求配置工具图片总预算，接受任意非负整数；`0` 禁用新增工具图片。有工具图片的历史仍需足够预算，不因传0静默删图。`Bridge.ask`、`SearchAgent`、CLI `ask --max-tool-images`、网页 `/api/chat` 参数和 Entari 同名配置均支持；每轮10张、下载并发10不随总预算改变。
+`answer(..., max_tool_images=600)` 可逐请求配置工具图片总预算，接受任意非负整数；`0` 禁用新增工具图片。有工具图片的历史仍需足够预算，不因传0静默删图。`Bridge.ask`、`SearchAgent`、CLI `ask --max-tool-images`、网页 `/api/chat` 参数和 Entari 同名配置均支持；每轮无额外总张数限制，Reader 单页仍受 `max_reader_images` 限制；最多20张同时下载，不随总预算改变。
 
-默认 DeepSeek 视觉模型会从搜索/Reader 返回的实际图片链接中提取候选，每轮新增处理最多10张、默认总共600张工具图片（同轮工具共享额度，失败占尝试预算，历史图片复用并计入总预算）；单张原图最多下载20 MiB、2.5秒硬超时、最多10张并发，失败跳过。压缩为最长边1280、质量75的 JPEG，全程内存处理后随工具结果发送，单图最多256KiB。不增设压缩 HTTP 服务，不让模型访问本地文件。
+默认 DeepSeek 视觉模型会从搜索/Reader 返回的实际图片链接中提取候选，按配置处理候选（Reader 单页默认最多尝试30张），受默认总共600张工具图片预算约束（同轮工具共享额度，失败占尝试预算，历史图片复用并计入总预算）；单张原图最多下载20 MiB、2.5秒硬超时、最多20张并发，失败跳过后继续处理后续候选；每批处理完成即释放原始下载字节。压缩为最长边1280、质量75的 JPEG，全程内存处理后随工具结果发送，单图最多256KiB。不增设压缩 HTTP 服务，不让模型访问本地文件。
+
+Reader 正文中的图片链接不按张数截断，JSON 原始响应受 2 MiB 上限约束，超限整次报错。下载候选按“原图/下载链接 → Markdown 图片 → 裸图片 URL 或分享参数”顺序提取、按 URL 去重，不按清晰度排序。网页图片逐页准备，每页选入上限内的候选分批处理；多类搜索结果一起准备时，以图搜图候选优先3个名额，再与其他搜索图片共享剩余总预算。解码时拒绝短边小于64像素、总像素超过2500万或非 JPEG/PNG/WEBP/GIF 的图片；失败仍占总尝试预算且不自动重试，但不阻止后续已选候选继续处理。成功图片全部附给模型，`width`、`height` 是压缩后的尺寸，由模型按相关性和清晰度决定最终展示哪些。超过单页/总预算或下载/解码失败的图片，其正文链接仍保留，但没有图片附件，也不会自动排队补抓；最终渲染只使用已下载通过处理的图片。
 
 模型通过 `media_images` 了解每张图的原链接、来源与附件顺序；每张附件紧邻的 `media_attachment` 文本标记再次绑定该图的 ID 与 URL，降低多图错配风险。图片下方说明直接来自该 URL 对应的 Markdown alt 文本，模型必须逐张核对，不能集中错配说明。最终在文章内部的相关正文附近，用独立段落的 `![图片说明](原图URL)` 选择已审阅图片；PNG渲染复用压缩字节，不再联网。`result.messages` 保留压缩图片附件供后续多轮复用，历史超过本次 `max_tool_images` 预算时需提高预算或新建对话；这与用户上传、聊天记录及组件图片分开计算。没有图片线索或下载失败不影响文字回答。
 

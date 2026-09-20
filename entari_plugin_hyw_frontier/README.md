@@ -35,6 +35,8 @@ plugins:
     request_timeout: 90
     max_concurrent: 2
     max_tool_images: 600  # 搜索/Reader 图片总预算；非负整数，0禁用新增工具图片
+    reader_engine: browser  # Jina 强制浏览器模式；default 使用默认引擎
+    max_reader_images: 30  # 单个 Reader 网页图片尝试上限；非负整数，0禁用新增网页图片
 ```
 
 当前模型为限时 ID，失效后需显式配置可用模型，不会自动回退。示例关闭思考，不改变核心库的默认值。支持核心库的 `provider`、`model`、`api`、`base_url`、`language` 和搜索设置，完整参数见 `config.py`。

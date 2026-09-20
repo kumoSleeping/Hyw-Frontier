@@ -20,8 +20,9 @@ from .ddgs import SEARCH_CONFIG as DDGS_SEARCH_CONFIG
 from .image_input import IMAGE_INPUT_CONFIG, MAX_MESSAGE_BYTES, MAX_MESSAGE_BLOCKS, ImageInputError, validate_images
 from .image_crop import CROP_CONFIG
 from .reverse_image import REVERSE_IMAGE_CONFIG
-from .jina import SEARCH_ENDPOINT as JINA_SEARCH_ENDPOINT, JinaError, load_jina_key
-from .media import MEDIA_CONFIG, MAX_IMAGES
+from .jina import SEARCH_ENDPOINT as JINA_SEARCH_ENDPOINT, READER_CONFIG, READER_ENGINES, JinaError, load_jina_key
+from .prompt_files import PROMPT_DIR
+from .media import MEDIA_CONFIG, MAX_IMAGES, MAX_READER_IMAGES
 from .model_limits import known_output_limit
 from .favicons import FAVICON_CONFIG
 from .parallel import load_parallel_key, SEARCH_MODE, SEARCH_MODES
@@ -113,6 +114,8 @@ class App:
         return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL, "providers": list(PROVIDERS),
                 "provider_presets": presets, "model_options": model_options,
                 "language": DEFAULT_LANGUAGE, "media": MEDIA_CONFIG,
+                'prompt_files': sorted(path.name for path in PROMPT_DIR.iterdir() if path.suffix in ('.md', '.json')),
+                'round_limit_notice': {'rounds_before_limit': 2, 'prompt_file': 'round_limit.md'},
                 "message_input": {"max_total_bytes": MAX_MESSAGE_BYTES, "max_blocks": MAX_MESSAGE_BLOCKS},
                 "development": {"auto_reload": os.environ.get("HYW_FRONTIER_RELOAD") == "1", "pid": os.getpid()},
                 "search": {"provider": SEARCH_PROVIDER, "providers": list(SEARCH_PROVIDERS),
@@ -121,6 +124,8 @@ class App:
                 "image_search_providers": {"jina": "jina", "parallel": "jina", "ddgs": "ddgs"},
                 "reverse_image_search": {**REVERSE_IMAGE_CONFIG, **bridge_status(self.home)},
                 "search_endpoints": {"jina": JINA_SEARCH_ENDPOINT},
+                "reader": {**READER_CONFIG, 'engines': list(READER_ENGINES),
+                           'max_reader_images': MAX_READER_IMAGES},
                 "tools_by_search_provider": {provider: [tool["name"] for tool in tool_definitions(provider)]
                                              for provider in SEARCH_PROVIDERS},
                 "search_result_policy": {"scope": "provider_default", "local_truncation": False},
@@ -310,6 +315,12 @@ class Handler(BaseHTTPRequestHandler):
         images = validate_images(data.get("images", []))
         rounds = data.get("max_rounds", 30)
         max_tool_images = data.get("max_tool_images", MAX_IMAGES)
+        max_reader_images = data.get('max_reader_images', MAX_READER_IMAGES)
+        if type(max_reader_images) is not int or max_reader_images < 0:
+            raise ValueError('max_reader_images must be a non-negative integer')
+        reader_engine = data.get('reader_engine', 'browser')
+        if reader_engine not in READER_ENGINES:
+            raise ValueError('Invalid reader engine')
         if type(max_tool_images) is not int or max_tool_images < 0:
             raise ValueError('max_tool_images must be a non-negative integer')
         search_mode = data.get("search_mode", SEARCH_MODE)
@@ -340,7 +351,8 @@ class Handler(BaseHTTPRequestHandler):
                                                  "search_provider": search_provider,
                                                  "images": [{"mimeType": image["mimeType"], "base64_length": len(image["data"])} for image in images],
                                                  "search_mode": effective_search_mode, "max_rounds": rounds,
-                                                 "max_tool_images": max_tool_images})
+                                                 "max_tool_images": max_tool_images,
+                                                 'max_reader_images': max_reader_images, 'reader_engine': reader_engine})
 
         def send(event):
             nonlocal sequence
@@ -368,6 +380,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise AgentLimitError("本测试会话已达20轮，请新建对话；不会自动压缩或删除上下文。")
             send({"type": "start", "provider": provider, "model": model, "reasoning": reasoning,
                   "reasoning_mode": reasoning_mode,
+                  'max_reader_images': max_reader_images, 'reader_engine': reader_engine,
                   "search_provider": search_provider, "search_mode": effective_search_mode})
             # Lazily construct the configured native Model on the task's own loop.
             # The instance then uses the same settings-preserving adapter as answer(model=...).
@@ -380,6 +393,7 @@ class Handler(BaseHTTPRequestHandler):
                 return configured_model(connection, name, timeout, reasoning[initial_level] if reasoning is not None else None)
             bridge = Bridge(home, timeout, session.cancel, model_factory=model_factory)
             agent = self.server.app.agent_factory(bridge, on_event=send, cancel_event=session.cancel,
+                                                  max_reader_images=max_reader_images, reader_engine=reader_engine,
                                                   max_rounds=rounds, max_tool_images=max_tool_images, reasoning=reasoning, reasoning_mode=reasoning_mode,
                                                   search_mode=search_mode,
                                                   search_provider=search_provider)

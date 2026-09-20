@@ -6,7 +6,8 @@ from pathlib import Path
 from arclet.entari import BasicConfModel
 
 from hyw_frontier.parallel import SEARCH_MODES
-from hyw_frontier.media import MAX_IMAGES
+from hyw_frontier.jina import READER_ENGINE, READER_ENGINES
+from hyw_frontier.media import MAX_IMAGES, MAX_READER_IMAGES
 from hyw_frontier.runtime import DEFAULT_MODEL
 from hyw_frontier.reasoning import resolve_reasoning, resolve_reasoning_mode
 from hyw_frontier.tools import SEARCH_PROVIDERS
@@ -31,6 +32,8 @@ class Config(BasicConfModel):
     search_mode: str = "turbo"
     max_rounds: int = 30
     max_tool_images: int = MAX_IMAGES
+    max_reader_images: int = MAX_READER_IMAGES
+    reader_engine: str = READER_ENGINE
     request_timeout: float = 90
     timeout: float = 300
     send_timeout: float = 30
@@ -67,6 +70,10 @@ class Config(BasicConfModel):
                 raise ValueError(f"{name} must be positive")
         if type(self.max_tool_images) is not int or self.max_tool_images < 0:
             raise ValueError('max_tool_images must be a non-negative integer')
+        if type(self.max_reader_images) is not int or self.max_reader_images < 0:
+            raise ValueError('max_reader_images must be a non-negative integer')
+        if self.reader_engine not in READER_ENGINES:
+            raise ValueError('reader_engine must be default or browser')
         if self.search_provider not in SEARCH_PROVIDERS or self.search_mode not in SEARCH_MODES:
             raise ValueError("Invalid search provider/mode")
         if self.log_max_bytes < 256 * 1024 or self.log_total_bytes < self.log_max_bytes:
@@ -85,7 +92,7 @@ class Config(BasicConfModel):
 
         options = {name: getattr(self, name) for name in (
             "provider", "model", "api", "base_url", "language", "reasoning", "reasoning_mode",
-            "search_provider", "search_mode", "max_rounds", "max_tool_images",
+            "search_provider", "search_mode", "max_rounds", "max_tool_images", "max_reader_images", "reader_engine",
         )}
         options["timeout"] = self.request_timeout
         if self.home:

@@ -2,9 +2,10 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+from .prompt_files import read_prompt
 
 _CONFIG = json.loads(Path(__file__).with_name("reasoning.json").read_text(encoding="utf-8"))
-RECONSIDER_PROMPT = "你现在需要重新用你的思考等级来审视提示词，重新开工"
+RECONSIDER_PROMPT = read_prompt('reconsider.md')
 
 
 def needs_reconsideration(previous: dict | None, provider: str, model: str, settings: dict) -> bool:

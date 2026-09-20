@@ -1,4 +1,4 @@
-"""Jina's direct Search API and standard Reader; no Pi CLI or browser fallback."""
+"""Jina's direct Search API and browser-engine Reader; no local browser fallback."""
 from __future__ import annotations
 
 from concurrent.futures import Future
@@ -20,6 +20,11 @@ from .http_transport import PooledOpener
 
 SEARCH_ENDPOINT = "https://svip.jina.ai/"
 PAGE_ENDPOINT = "https://r.jina.ai/"
+READER_ENGINE = "browser"
+READER_ENGINES = ('default', 'browser')
+READER_FORMAT = "markdown"
+READER_CONFIG = {"endpoint": PAGE_ENDPOINT, "engine": READER_ENGINE, "format": READER_FORMAT,
+                 "authentication": "anonymous"}
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
@@ -126,7 +131,10 @@ class JsonTransport:
 
 class JinaClient:
     """Per-task single-flight cache. Identical concurrent operations share one request."""
-    def __init__(self, home: Path, transport: Callable | None = None):
+    def __init__(self, home: Path, transport: Callable | None = None, *, reader_engine: str = READER_ENGINE):
+        if reader_engine not in READER_ENGINES:
+            raise ValueError('reader_engine must be default or browser')
+        self.reader_engine = reader_engine
         self.home = home
         self._transport = JsonTransport("Jina") if transport is None else None
         self.transport = self._transport if transport is None else transport
@@ -168,6 +176,10 @@ class JinaClient:
 
     def _request(self, endpoint: str, body: dict, *, authenticated: bool = True) -> dict:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if endpoint == PAGE_ENDPOINT:
+            if self.reader_engine != 'default':
+                headers["X-Engine"] = self.reader_engine
+            headers["X-Respond-With"] = READER_FORMAT
         if authenticated:
             headers["Authorization"] = f"Bearer {load_jina_key(self.home)}"
         payload = None
@@ -224,17 +236,17 @@ class JinaClient:
         return self._cached("search:" + json.dumps(body, sort_keys=True), fetch)
 
     def read_url(self, item: dict) -> dict:
-        """Anonymous standard Reader: no key, engine override or local content cropping."""
+        """Anonymous Reader with browser rendering and no local content cropping."""
         url = public_url(item["url"])
 
         def fetch():
-            # Standard Reader behavior only: no selectors, browser modes or hidden fallback.
+            # Jina executes page JavaScript; no selectors or hidden local fallback.
             payload = self._request(PAGE_ENDPOINT, {"url": url}, authenticated=False)
             data = payload.get("data")
             if not isinstance(data, dict) or not isinstance(data.get("content"), str):
                 raise JinaError("invalid_response", "Jina Reader 未返回正文")
             if not data["content"].strip():
-                raise JinaError("empty_page", "该页没有可读正文；Browser 未实现，请寻找替代来源或报告证据缺失")
+                raise JinaError("empty_page", "Jina Reader 浏览器渲染后没有可读正文，请寻找替代来源或报告证据缺失")
             return {
                 "url": url, "source_url": str(data.get("url") or url)[:2000],
                 "title": str(data.get("title") or url), "content": data["content"],

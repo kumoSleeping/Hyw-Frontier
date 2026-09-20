@@ -21,10 +21,13 @@
       <label for="reasoning-effort">思考强度</label><select id="reasoning-effort" aria-describedby="reasoning-hint" disabled></select>
       <p id="reasoning-hint" class="hint">按所选模型提供可用等级。</p>
       <label for="rounds">模型轮次安全阈值</label><input id="rounds" type="number" min="1" step="1" value="30" inputmode="numeric" aria-describedby="rounds-hint">
-      <p id="rounds-hint" class="hint">默认30，可输入更大的正整数。</p>
+      <p id="rounds-hint" class="hint">默认30；第28轮起提醒直接回答。其他上限也会提前两轮提醒。</p>
       <label for="search-provider">搜索服务</label><select id="search-provider" disabled></select>
       <label for="search-mode">Parallel 模式</label><select id="search-mode" aria-describedby="search-hint" disabled></select>
       <p id="search-hint" class="hint">下一次提问生效，本浏览器记住选择。</p>
+      <label for="reader-engine">网页获取方式</label><select id="reader-engine" disabled><option value="default">Jina 默认</option><option value="browser">浏览器模式</option></select>
+      <label for="max-reader-images">单页面图片上限</label><input id="max-reader-images" type="number" min="0" step="1" value="30" inputmode="numeric" disabled>
+      <p class="hint">默认每页最多尝试30张；可调整，0为不下载网页图片。整次提问总尝试上限600张，同时最多下载20张。下次提问生效。</p>
     </section>
     <section class="settings">
       <h2>以图搜图图床</h2>
@@ -39,7 +42,7 @@
       <p>网页搜索 <code>web_search</code></p>
       <p>图片搜索（DDGS 模式免密钥，其余使用 Jina SVIP）<code>search_images</code></p>
       <p>用户图片裁剪（有用户原图时启用）<code>crop_user_image</code></p>
-      <p>标准网页读取 <code>jina_read_url</code></p>
+      <p>Markdown 网页读取 <code>jina_read_url</code></p>
       <p>以图搜图 <code>reverse_image_search</code></p>
       <p>发送过程介绍 <code>send_process_intro</code></p>
       <p class="hint">网页读取使用匿名免费额度，仅限用户提供链接或明确必须阅读指定文章的需求。回答图片由本机 Pillow 离线绘制，不启动浏览器。</p>
@@ -57,7 +60,7 @@
         <div class="actions"><button id="stop" type="button" hidden>停止</button><button id="send" type="submit" disabled>发送</button></div>
       </form>
       <p id="activity" role="status" aria-live="polite"></p>
-      <p id="search-progress" role="status" aria-live="polite" aria-label="轮次耗时与图片预算" title="按轮统计总耗时、模型耗时和工具耗时；图片压缩归入模型耗时，上传包含在模型调用内，媒体下载归入工具耗时并单列。并发耗时按阶段实际经过时间统计，不逐项相加。图片显示每次模型请求携带的工具图片数，每轮新增处理最多10张、默认总共600张不同工具图片（可通过 max_tool_images 参数配置），重放历史不占新增额度且不重复下载。" hidden></p>
+      <p id="search-progress" role="status" aria-live="polite" aria-label="轮次耗时与图片预算" title="按轮统计总耗时、模型耗时和工具耗时；图片压缩归入模型耗时，上传包含在模型调用内，媒体下载归入工具耗时并单列。并发耗时按阶段实际经过时间统计，不逐项相加。显示逐页读取、图片下载与压缩耗时；图片显示每次主模型请求携带的工具图片数，每个网页默认最多尝试30张（可调整）、最多20张同时下载、默认总共尝试600张不同工具图片（可通过 max_tool_images 参数配置），重放历史不占新增额度且不重复下载。" hidden></p>
       <p id="process-intro" role="status" aria-live="polite" aria-label="过程介绍" hidden></p>
       <div id="result" aria-label="当前回答图片" hidden></div>
       <section id="debug" aria-label="完整调试输出"></section>

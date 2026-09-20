@@ -86,7 +86,7 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
         if path.is_symlink():
             continue
         summary = None
-        rounds, searches = {}, {}
+        rounds, searches, pages = {}, {}, {}
         with path.open(encoding="utf-8", errors="replace") as source:
             for line in source:
                 try:
@@ -99,7 +99,7 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                 if kind == "request":
                     if query.casefold() not in event.get("message", "").casefold():
                         break
-                    summary = {key: event.get(key) for key in ("request_id", "timestamp", "message", "provider", "model", "reasoning", "search_provider", "search_mode")}
+                    summary = {key: event.get(key) for key in ("request_id", "timestamp", "message", "provider", "model", "reasoning", "search_provider", "search_mode", 'max_reader_images', 'reader_engine')}
                     summary.update(file=str(path), status="incomplete", log_truncated=False)
                 if summary is None:
                     continue
@@ -145,6 +145,9 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                     row.update(end_ms=ms, duration_ms=ms - row["start_ms"], usage=event.get("usage"))
                 elif kind in ("text_delta", "thinking_delta") and event["round"] in rounds:
                     rounds[event["round"]].setdefault("first_" + kind + "_ms", ms)
+                elif kind == 'page_timing':
+                    pages.setdefault(event['id'], {}).update({key: event.get(key) for key in
+                        ('id', 'url', 'reader_ms', 'download_ms', 'processing_ms', 'images', 'max_reader_images', 'status')})
                 elif kind == "query_start":
                     searches[(event.get("id", ""), event["query_index"])] = {
                         "round": event["round"], "query": event["query"], "start_ms": ms,
@@ -154,7 +157,7 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                     if row is not None:
                         row.update(end_ms=ms, duration_ms=event["duration_ms"], ok=event["ok"], cached=event.get("cached"))
         if summary is not None:
-            summary.update(model_rounds=list(rounds.values()), searches=list(searches.values()))
+            summary.update(model_rounds=list(rounds.values()), searches=list(searches.values()), pages=list(pages.values()))
             summaries.append(summary)
         if len(summaries) == limit:
             break

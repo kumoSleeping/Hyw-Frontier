@@ -125,6 +125,8 @@ export function createTrace(article, anchor, scroll) {
     caption.textContent = `开发者输出 · ${events.length} 个事件 · ${((item.elapsed_ms || 0) / 1000).toFixed(1)}s`;
     if (item.type === "client_request") {
       box(root, "本次问题与请求配置", "request-settings").pre.textContent = JSON.stringify(item, null, 2);
+    } else if (item.type === 'round_limit_warning') {
+      box(round(item.round).node, `即将达到 ${item.max_rounds} 轮上限 · 已注入模型提示词`).pre.textContent = item.text;
     } else if (item.type === "model_start") {
       const current = round(item.round);
       const tier = { high: "高", medium: "中", low: "低" }[item.reasoning_level];

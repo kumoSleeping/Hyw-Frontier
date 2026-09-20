@@ -171,7 +171,8 @@ class FrontierService:
                     await self.send(session, f"请输入问题：{self.config.command} <问题>；帮助：{self.config.help_command}")
                     status = "done"
                     return
-                question = question or '请结合提供的消息、组件和图片回答。'
+                from hyw_frontier.prompt_files import read_prompt
+                question = question or read_prompt('component_question.md')
                 prepared = await prepare_components(parsed, question)
                 trace.event({"type": "input_ready", "images": prepared.images, "history_messages": 0,
                              "record_messages": parsed.message_count, "input_bytes": prepared.byte_count,

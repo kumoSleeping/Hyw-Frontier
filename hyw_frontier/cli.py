@@ -6,7 +6,7 @@ import sys
 
 from .runtime import Bridge, DEFAULT_LANGUAGE, DEFAULT_MODEL, DEFAULT_PROMPT, DEFAULT_PROVIDER, FrontierError, PROVIDERS, build_context, load_prompt
 from .jina import JinaClient
-from .media import MAX_IMAGES
+from .media import MAX_IMAGES, MAX_READER_IMAGES
 from .tools import ToolRuntime, tool_definitions
 
 
@@ -45,6 +45,9 @@ def main() -> int:
     ask.add_argument("--max-rounds", type=int, default=30, help="模型轮次安全阈值，正整数，默认30")
     ask.add_argument("--max-tool-images", type=int, default=MAX_IMAGES,
                      help="工具图片总预算，非负整数，默认600；0禁用新增工具图片")
+    ask.add_argument('--max-reader-images', type=int, default=MAX_READER_IMAGES,
+                     help='单页面图片尝试上限，非负整数，默认30；0禁用新增网页图片')
+    ask.add_argument('--reader-engine', choices=('default', 'browser'), default='browser')
     preview = commands.add_parser("preview", help="离线检查应用上下文，不读取凭据、不调用模型")
     preview.add_argument("text", nargs="?", default="你好")
     preview.add_argument("--system-prompt", type=Path, default=DEFAULT_PROMPT)
@@ -86,7 +89,8 @@ def main() -> int:
                 return 0
             if args.command == "ask":
                 print(bridge.ask(args.provider, args.model, args.text, args.system_prompt,
-                                 max_rounds=args.max_rounds, max_tool_images=args.max_tool_images, language=args.language))
+                                 max_rounds=args.max_rounds, max_tool_images=args.max_tool_images, language=args.language,
+                                 max_reader_images=args.max_reader_images, reader_engine=args.reader_engine))
                 return 0
             request = {"command": args.command}
             if hasattr(args, "provider"):

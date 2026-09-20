@@ -7,6 +7,7 @@ from io import BytesIO
 import warnings
 
 from PIL import Image
+from .prompt_files import read_prompt
 
 MIME_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP", "image/gif": "GIF"}
 MAX_IMAGES = 4
@@ -14,7 +15,7 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 10 * 1024 * 1024
 MAX_MESSAGE_BYTES = 256 * 1024 * 1024
 MAX_MESSAGE_BLOCKS = 32768
-IMAGE_ONLY_TEXT = "[用户发送了这张图，请探究根据这张图，给出一份符合系统提示词所需求的的文章]"
+IMAGE_ONLY_TEXT = read_prompt('image_only.md')
 IMAGE_INPUT_CONFIG = {"enabled": True, "paste_only": True, "mime_types": list(MIME_FORMATS),
                       "max_images": MAX_IMAGES, "max_image_bytes": MAX_IMAGE_BYTES,
                       "max_total_bytes": MAX_TOTAL_BYTES, "image_only_text": IMAGE_ONLY_TEXT}

@@ -10,7 +10,7 @@ from threading import Event
 from .credentials import CredentialStore, PROVIDERS
 from .errors import FrontierError
 from .image_input import IMAGE_ONLY_TEXT, validate_images, validate_message_content
-from .media import MAX_IMAGES
+from .media import MAX_IMAGES, MAX_READER_IMAGES
 from .tools import tool_definitions
 
 PACKAGE = Path(__file__).resolve().parent
@@ -137,9 +137,11 @@ class Bridge:
 
     def ask(self, provider: str, model: str, text: str, prompt: Path = DEFAULT_PROMPT,
             *, history: list[dict] | None = None, max_rounds: int = 30, images: list[dict] | None = None,
-            language: str = DEFAULT_LANGUAGE, max_tool_images: int = MAX_IMAGES) -> str:
+            language: str = DEFAULT_LANGUAGE, max_tool_images: int = MAX_IMAGES,
+            max_reader_images: int = MAX_READER_IMAGES, reader_engine: str = 'browser') -> str:
         from .agent import AgentLimitError, SearchAgent
-        agent = SearchAgent(self, max_rounds=max_rounds, max_tool_images=max_tool_images, prefetch_icons=False)
+        agent = SearchAgent(self, max_rounds=max_rounds, max_tool_images=max_tool_images, prefetch_icons=False,
+                            max_reader_images=max_reader_images, reader_engine=reader_engine)
         try:
             result = agent.run(provider, model, build_context(
                 text, load_prompt(prompt, language=language), history, images=images))

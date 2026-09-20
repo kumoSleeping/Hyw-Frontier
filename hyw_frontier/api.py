@@ -21,7 +21,7 @@ from .agent import SearchAgent
 from .cleanup import clear_exception_frames
 from .costs import Costs, model_items, summarize
 from .jina import JinaClient
-from .media import MAX_IMAGES
+from .media import MAX_IMAGES, MAX_READER_IMAGES
 from .rendering import CardRenderer
 from .render_protocol import answer_text, parse_answer
 from .runtime import Bridge, DEFAULT_LANGUAGE, DEFAULT_MODEL, DEFAULT_PROVIDER, build_context, load_prompt, render_prompt
@@ -71,6 +71,8 @@ async def answer(
     reasoning_mode: Literal["auto", "high", "medium", "low"] = "auto",
     max_rounds: int = 30,
     max_tool_images: int = MAX_IMAGES,
+    max_reader_images: int = MAX_READER_IMAGES,
+    reader_engine: Literal['default', 'browser'] = 'browser',
     timeout: float = 300,
     system_prompt: str | None = None,
     history: list[dict] | None = None,
@@ -120,6 +122,9 @@ async def answer(
     `home` still controls search credentials for this form.
     `max_tool_images` defaults to 600; non-negative integer, 0 disables new tool
     images. History tool images count toward this budget; user/record images do not.
+    `max_reader_images` defaults to 30 candidate attempts per Reader page;
+    non-negative integer, 0 disables new Reader images. Text remains complete.
+    `reader_engine` selects Jina's default fetching or forced browser rendering.
     `message_content` is an ordered list of text/image blocks for parsed chat records
     or cards, mutually exclusive with `images`. Maximum 256 MiB including question
     text and decoded image bytes; callers truncate before submitting. Ordinary
@@ -194,12 +199,13 @@ async def answer(
             with ExitStack() as resources:
                 bridge = backend or Bridge(home, timeout, cancelled, api=api, base_url=base_url, api_key=api_key,
                                            model=native_model, loop=loop if native_model is not None else None)
-                jina = JinaClient(bridge.home)
+                jina = JinaClient(bridge.home, reader_engine=reader_engine)
                 # Also covers ToolRuntime construction failure; close is idempotent.
                 resources.callback(jina.close)
                 with ToolRuntime(jina, search_provider=search_provider,
                                  search_mode=search_mode, send=send_from_worker) as tools:
                     agent = SearchAgent(bridge, tools, max_rounds=max_rounds, max_tool_images=max_tool_images, cancel_event=cancelled,
+                                        max_reader_images=max_reader_images, reader_engine=reader_engine,
                                         reasoning=reasoning, reasoning_mode=reasoning_mode,
                                         search_provider=search_provider, search_mode=search_mode)
                     resources.callback(agent.release)

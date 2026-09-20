@@ -58,6 +58,7 @@ class ToolRuntime:
         self.definitions = tool_definitions(search_provider)
         self._validators = {tool["name"]: Draft202012Validator(tool["parameters"], format_checker=FormatChecker())
                             for tool in self.definitions}
+
         if search is not None:
             self.search = search
         elif search_provider == "ddgs":
@@ -187,7 +188,9 @@ class ToolRuntime:
                     result = (self._batch([args], self.images.search_images, "query", notify) if name == "search_images"
                               else self._batch(args["searches"], self.search.search, "query", notify))
                 elif name == "jina_read_url":
-                    result = self._batch([args], self.jina.read_url, "url")
+                    notify = (lambda event: on_query({**event, "id": call.get("id", ""), "name": name,
+                                                      "provider": "jina", "search_mode": None})) if on_query else None
+                    result = self._batch([args], self.jina.read_url, "url", notify)
                 else:
                     result = {"ok": False, "code": "unknown_tool", "error": "工具未实现"}
         except Exception:
