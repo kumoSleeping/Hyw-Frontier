@@ -20,7 +20,7 @@ _ACTIVE: set[Path] = set()
 _FILES_LOCK = Lock()
 _INLINE = re.compile(r"data:image/[^;,\s]+;base64,[A-Za-z0-9+/=]+")
 _URL = re.compile(r"https?://[^\s<>\"']+")
-_IMAGE = re.compile(r"!\[[^\]\n]*\]\(<?(https?://[^\s)>]+)")
+_IMAGE = re.compile(r"!\[[^\]\n]*\]\(<?(hyw-media://image/[0-9a-f]{64}|https?://[^\s)>]+)")
 _SECRET_KEYS = {"authorization", "api_key", "apikey", "password", "access_token", "refresh_token",
                 "thoughtsignature", "signature", "providermetadata", "providerdetails"}
 
