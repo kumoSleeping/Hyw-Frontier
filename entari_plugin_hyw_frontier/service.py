@@ -22,6 +22,7 @@ from .message_parser import parse_input
 from .config import Config
 from .delivery import outgoing_jpeg
 from .trace import BotTrace
+from hyw_frontier.telemetry import stage
 
 Scope = tuple[str, str, str, str, str]
 
@@ -158,7 +159,8 @@ class FrontierService:
         async def send_intro(text: str):
             trace.event({"type": "intro_callback_start", "text": text})
             try:
-                receipts = await self.send(session, text)
+                with stage(trace.event, 'intro_delivery'):
+                    receipts = await self.send(session, text)
             except BaseException as exc:
                 trace.event({"type": "intro_delivery_failed", "error_type": type(exc).__name__})
                 raise
@@ -166,14 +168,19 @@ class FrontierService:
 
         try:
             async with asyncio.timeout(self.config.timeout):
-                parsed = await parse_input(session, chain)
+                with stage(trace.event, 'message_parse') as metrics:
+                    parsed = await parse_input(session, chain)
+                    metrics.update(record_messages=parsed.message_count, parts=len(parsed.parts))
                 if not question and not parsed.parts:
                     await self.send(session, f"请输入问题：{self.config.command} <问题>；帮助：{self.config.help_command}")
                     status = "done"
                     return
                 from hyw_frontier.prompt_files import read_prompt
                 question = question or read_prompt('component_question.md')
-                prepared = await prepare_components(parsed, question)
+                with stage(trace.event, 'attachment_prepare') as metrics:
+                    prepared = await prepare_components(parsed, question, on_event=trace.event)
+                    metrics.update(images=prepared.images, input_bytes=prepared.byte_count,
+                                   failed_images=prepared.failed_images, truncated=prepared.truncated)
                 trace.event({"type": "input_ready", "images": prepared.images, "history_messages": 0,
                              "record_messages": parsed.message_count, "input_bytes": prepared.byte_count,
                              "failed_images": prepared.failed_images, "input_truncated": prepared.truncated,
@@ -195,20 +202,24 @@ class FrontierService:
                 if result.kind == 'text':
                     phase = "text_delivery"
                     trace.event({"type": "text_delivery_start", "characters": len(result.display_text)})
-                    receipts = await self.send_chunks(session, result.display_text)
+                    with stage(trace.event, 'text_delivery'):
+                        receipts = await self.send_chunks(session, result.display_text)
                     trace.event({"type": "text_delivered", "receipt_ids": [item.id for item in receipts]})
                 else:
                     phase = "jpeg_encoding"
                     try:
-                        outgoing, width, height = await outgoing_jpeg(result.png, self.config.jpeg_quality)
+                        with stage(trace.event, 'jpeg_encoding') as metrics:
+                            outgoing, width, height = await outgoing_jpeg(result.png, self.config.jpeg_quality)
+                            metrics.update(input_bytes=len(result.png), output_bytes=len(outgoing), width=width, height=height)
                         trace.event({"type": "outgoing_image", "mime_type": "image/jpeg",
                                      "png_bytes": len(result.png), "bytes": len(outgoing),
                                      "quality": self.config.jpeg_quality, "width": width, "height": height})
                         phase = "image_delivery"
                         trace.event({"type": "image_delivery_start", "mime_type": "image/jpeg"})
-                        async with asyncio.timeout(self.config.send_timeout):
-                            receipts = await session.send(MessageChain(Image.of(raw=outgoing, mime="image/jpeg")),
-                                                          reply_to=self.config.quote)
+                        with stage(trace.event, 'image_delivery'):
+                            async with asyncio.timeout(self.config.send_timeout):
+                                receipts = await session.send(MessageChain(Image.of(raw=outgoing, mime="image/jpeg")),
+                                                              reply_to=self.config.quote)
                         trace.event({"type": "image_delivered", "receipt_ids": [item.id for item in receipts or []]})
                     except Exception as exc:  # noqa: BLE001 - adapter-independent delivery boundary
                         trace.event({"type": "image_delivery_failed", "phase": phase, "error_type": type(exc).__name__})

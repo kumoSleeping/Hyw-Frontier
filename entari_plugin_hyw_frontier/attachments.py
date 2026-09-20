@@ -10,6 +10,7 @@ from hyw_frontier.image_input import ImageInputError, MAX_IMAGES, MAX_MESSAGE_BY
 
 from .message_parser import ParsedMessage
 from hyw_frontier.media import Candidate, MAX_DOWNLOAD_BYTES, compress, download
+from hyw_frontier.telemetry import stage
 
 # Chat CDNs are slower than search thumbnails; keep the same bounded worker, longer budget.
 ATTACHMENT_DOWNLOAD_TIMEOUT = 15.0
@@ -23,7 +24,7 @@ class AttachmentError(ImageInputError):
         self.code = code
 
 
-def _prepare(sources: list[str], cancelled: Event) -> list[dict]:
+def _prepare(sources: list[str], cancelled: Event, on_event=None, source_id='') -> list[dict]:
     images = []
     for source in sources:
         if cancelled.is_set():
@@ -37,8 +38,10 @@ def _prepare(sources: list[str], cancelled: Event) -> list[dict]:
                             max_image_bytes=MAX_DOWNLOAD_BYTES, max_total_bytes=MAX_DOWNLOAD_BYTES)
             raw = base64.b64decode(data, validate=True)
         elif source.startswith(("https://", "http://")) and len(source) <= 8192:
-            _, raw, status, _ = download(Candidate(source, source, "用户附件", 0), cancelled,
-                                         timeout=ATTACHMENT_DOWNLOAD_TIMEOUT)
+            with stage(on_event, 'attachment_download', source_id=source_id) as metrics:
+                _, raw, status, _ = download(Candidate(source, source, "用户附件", 0), cancelled,
+                                             timeout=ATTACHMENT_DOWNLOAD_TIMEOUT)
+                metrics.update(status='ok' if raw is not None else status, download_bytes=len(raw or b''))
             if raw is None:
                 if status == "download_timeout":
                     raise AttachmentError("attachment_download_timeout", "获取图片超时，请重新上传后重试。")
@@ -47,7 +50,10 @@ def _prepare(sources: list[str], cancelled: Event) -> list[dict]:
         else:
             raise AttachmentError("attachment_invalid_source", "不读取本地文件或私有地址，请直接上传图片。")
         try:
-            raw, _ = compress(raw, min_edge=1)
+            with stage(on_event, 'attachment_compression', source_id=source_id) as metrics:
+                metrics['input_bytes'] = len(raw)
+                raw, (width, height) = compress(raw, min_edge=1)
+                metrics.update(output_bytes=len(raw), width=width, height=height)
         except Exception:  # noqa: BLE001 - sanitize decoder errors at the attachment boundary
             raise AttachmentError("attachment_invalid_image",
                                   "无法处理图片：格式不支持、图片损坏、过小或超过尺寸限制，请转换为普通 JPG/PNG 后重新上传。") from None
@@ -55,14 +61,14 @@ def _prepare(sources: list[str], cancelled: Event) -> list[dict]:
     return images
 
 
-async def prepare_images(chain: MessageChain) -> list[dict]:
+async def prepare_images(chain: MessageChain, *, on_event=None, source_id='') -> list[dict]:
     sources = [image.src for image in chain.get(Image)]
     if len(sources) > MAX_IMAGES:
         raise AttachmentError("attachment_too_many", "每次最多4张图片，请减少附件数量。")
     if not sources:
         return []
     cancelled = Event()
-    task = asyncio.create_task(asyncio.to_thread(_prepare, sources, cancelled))
+    task = asyncio.create_task(asyncio.to_thread(_prepare, sources, cancelled, on_event, source_id))
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -89,7 +95,7 @@ class PreparedComponents:
     truncation_reason: str
 
 
-async def prepare_components(parsed: ParsedMessage, question: str) -> PreparedComponents:
+async def prepare_components(parsed: ParsedMessage, question: str, *, on_event=None) -> PreparedComponents:
     """Bounded ordered image preparation, independent of all tool-image quotas.
 
     Reserve current-request/truncation text before admitting blocks. A failed
@@ -129,7 +135,8 @@ async def prepare_components(parsed: ParsedMessage, question: str) -> PreparedCo
             if item is None:
                 return
             index, part = item
-            pending[index] = asyncio.create_task(prepare_images(MessageChain(Image(src=part.value))))
+            pending[index] = asyncio.create_task(prepare_images(MessageChain(Image(src=part.value)),
+                                                               on_event=on_event, source_id=part.source_id))
 
     fill()
     try:

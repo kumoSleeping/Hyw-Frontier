@@ -250,6 +250,7 @@ async def answer(
                     raise
                 observe({"type": "render_end", "duration_ms": round((time.monotonic() - rendering) * 1000),
                          "image": {"mime_type": "image/png", "bytes": len(card.png)},
+                         "stages_ms": card.timings,
                          "diagnostics": list(card.diagnostics)})
                 return Answer(text, card.png, deepcopy(agent.context["messages"]),
                               round((rendering - started) * 1000), round((time.monotonic() - rendering) * 1000),

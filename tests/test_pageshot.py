@@ -32,7 +32,12 @@ class PageshotTests(unittest.TestCase):
         self.addCleanup(self.store.close)
 
     def test_capture_returns_full_page_attachment_and_crop_registers_final_asset(self):
-        result, attachments = self.store.run({"url": "https://example.com/article"})
+        events = []
+        result, attachments = self.store.run({"url": "https://example.com/article"}, on_event=events.append)
+        ended = [e for e in events if e['type'] == 'stage_end']
+        self.assertEqual([e['stage'] for e in ended], ['pageshot_generate', 'pageshot_download', 'pageshot_compression'])
+        self.assertTrue(all(e['status'] == 'ok' and e['duration_ms'] >= 0 for e in ended))
+        self.assertEqual(ended[1]['download_bytes'], len(self.raw))
         self.assertTrue(result["ok"])
         self.assertTrue(result["full_page"])
         self.assertEqual((result["width"], result["height"]), (800, 2400))

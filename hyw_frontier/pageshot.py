@@ -20,6 +20,7 @@ from PIL import Image, ImageOps
 from .jina import JinaClient, JinaError
 from .media_refs import display_url as image_display_url
 from .prompt_files import read_prompt
+from .telemetry import stage
 
 MAX_STORED_PAGESHOTS = 4
 MAX_SOURCE_PIXELS = 80_000_000
@@ -146,11 +147,17 @@ class PageshotStore:
         self._asset_sink = None
         self._reserve_image = None
 
-    def capture(self, url: str) -> tuple[dict, list[dict]]:
-        shot = self.jina.pageshot_url({"url": url})
-        raw = self.fetch_image(shot["image_url"])
+    def capture(self, url: str, *, on_event=None) -> tuple[dict, list[dict]]:
+        with stage(on_event, 'pageshot_generate') as metrics:
+            shot = self.jina.pageshot_url({"url": url})
+            metrics['cached'] = shot.get('cached', False)
+        with stage(on_event, 'pageshot_download') as metrics:
+            raw = self.fetch_image(shot["image_url"])
+            metrics['download_bytes'] = len(raw)
         try:
-            preview, (width, height), (source_width, source_height) = _model_preview(raw)
+            with stage(on_event, 'pageshot_compression') as metrics:
+                preview, (width, height), (source_width, source_height) = _model_preview(raw)
+                metrics.update(input_bytes=len(raw), output_bytes=len(preview), width=width, height=height)
         except (OSError, ValueError, SyntaxError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
             raise JinaError("invalid_pageshot", "Reader pageshot 图片无法解析") from exc
         digest = hashlib.sha256(shot["url"].encode() + raw).hexdigest()[:20]
@@ -178,7 +185,7 @@ class PageshotStore:
             {"type": "image", "mimeType": "image/jpeg", "data": base64.b64encode(preview).decode("ascii")},
         ]
 
-    def crop(self, pageshot_id: str, bbox: list[int]) -> tuple[dict, list[dict]]:
+    def crop(self, pageshot_id: str, bbox: list[int], *, on_event=None) -> tuple[dict, list[dict]]:
         with self._lock:
             record = self._shots.get(pageshot_id)
         if record is None:
@@ -195,7 +202,7 @@ class PageshotStore:
                 "error": "bbox 须使用 pageshot_attachment 的像素坐标 [left, top, right, bottom]，且位于截图范围内",
             }, []
         try:
-            with ExitStack() as resources:
+            with stage(on_event, 'pageshot_crop_compression', pageshot_id=pageshot_id) as metrics, ExitStack() as resources:
                 image = _oriented_image(record["raw"], resources)
                 source_width, source_height = image.size
                 left = math.floor(bbox[0] * source_width / width)
@@ -205,6 +212,7 @@ class PageshotStore:
                 right, bottom = min(source_width, right), min(source_height, bottom)
                 crop = resources.enter_context(closing(image.crop((left, top, right, bottom))))
                 encoded, (out_width, out_height) = _render_crop(crop)
+                metrics.update(output_bytes=len(encoded), width=out_width, height=out_height)
         except JinaError:
             raise
         except (OSError, ValueError, SyntaxError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
@@ -235,13 +243,13 @@ class PageshotStore:
             {"type": "image", "mimeType": "image/jpeg", "data": base64.b64encode(encoded).decode("ascii")},
         ]
 
-    def run(self, args: dict) -> tuple[dict, list[dict]]:
+    def run(self, args: dict, *, on_event=None) -> tuple[dict, list[dict]]:
         try:
             if self._reserve_image is not None and not self._reserve_image():
                 return {"ok": False, "code": "image_budget_exhausted",
                         "error": "工具图片预算已用尽，未获取或裁剪截图；请使用已有资料完成回答"}, []
             if "url" in args:
-                return self.capture(args["url"])
-            return self.crop(args["pageshot_id"], args["bbox"])
+                return self.capture(args["url"], on_event=on_event)
+            return self.crop(args["pageshot_id"], args["bbox"], on_event=on_event)
         except JinaError as exc:
             return {"ok": False, "code": exc.code, "error": str(exc)}, []

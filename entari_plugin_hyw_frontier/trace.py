@@ -8,60 +8,17 @@ import time
 from collections import Counter
 from pathlib import Path
 from threading import Lock, current_thread
-from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 
 from hyw_frontier.request_log import RequestLog
+from hyw_frontier.telemetry import redact
 
 from .config import Config
 
 _ACTIVE: set[Path] = set()
 _FILES_LOCK = Lock()
-_INLINE = re.compile(r"data:image/[^;,\s]+;base64,[A-Za-z0-9+/=]+")
-_URL = re.compile(r"https?://[^\s<>\"']+")
 _IMAGE = re.compile(r"!\[[^\]\n]*\]\(<?(hyw-media://image/[0-9a-f]{64}|https?://[^\s)>]+)")
-_SECRET_KEYS = {"authorization", "api_key", "apikey", "password", "access_token", "refresh_token",
-                "thoughtsignature", "signature", "providermetadata", "providerdetails"}
-
-
-def _url(value: str) -> str:
-    try:
-        parts = urlsplit(value)
-        # Keep enough information to locate the source, but no signed query/userinfo.
-        return urlunsplit((parts.scheme, parts.hostname or "", parts.path, "", ""))
-    except ValueError:
-        return "[invalid URL]"
-
-
-def redact(value, depth=0):
-    if depth > 16:
-        return "[depth limit]"
-    if isinstance(value, dict):
-        if value.get("type") == "image":
-            return {"type": "image", "mimeType": value.get("mimeType"),
-                    "base64_chars_omitted": len(value.get("data", ""))}
-        if value.get("type") == "thinking":
-            return {"type": "thinking", "chars_omitted": len(value.get("thinking", ""))}
-        return {str(k): redact(v, depth + 1) for k, v in list(value.items())[:300]
-                if str(k).lower() not in _SECRET_KEYS}
-    if isinstance(value, (list, tuple)):
-        return [redact(item, depth + 1) for item in value[:200]]
-    if isinstance(value, str):
-        # Tool results carry JSON inside their text block. Redact nested image payloads too.
-        if value.startswith(("{", "[")):
-            try:
-                decoded = json.loads(value)
-            except ValueError:
-                pass
-            else:
-                return json.dumps(redact(decoded, depth + 1), ensure_ascii=False)
-        text = _INLINE.sub("[inline image omitted]", value)
-        text = _URL.sub(lambda m: _url(m[0]), text)
-        return text if len(text) <= 64000 else text[:64000] + "[text truncated]"
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return f"[{type(value).__name__} omitted]"
 
 
 def _prune(directory: Path, config: Config):
@@ -99,6 +56,8 @@ class BotTrace:
         self.selected: list[str] = []
         self.details_truncated = False
         self.failure: dict = {}
+        self.stage_totals: dict = {}
+        self.round_timings: dict = {}
         if config.log_enabled:
             home = Path(config.log_home).expanduser() if config.log_home else (
                 Path(config.home or os.environ.get("HYW_FRONTIER_HOME", "~/.hyw-frontier")).expanduser() / "entari")
@@ -134,7 +93,14 @@ class BotTrace:
         if kind.endswith("_delta") or kind in ("toolcall_start", "toolcall_end", "thinking_start", "text_start"):
             return
         with self.lock:
-            if kind == "request_failed":
+            if kind == "stage_end":
+                total = self.stage_totals.setdefault(event["stage"], {"count": 0, "duration_ms_sum": 0, "failures": 0})
+                total["count"] += 1
+                total["duration_ms_sum"] = round(total["duration_ms_sum"] + event["duration_ms"], 2)
+                total["failures"] += event.get("status") != "ok"
+            elif kind == "round_timing":
+                self.round_timings[event["round"]] = {key: event[key] for key in ("round", "timing_version", "total_ms", "model_ms", "tool_ms", "media_download_ms", "image_processing_ms", "complete") if key in event}
+            elif kind == "request_failed":
                 self.failure = {key: event[key] for key in
                                 ("error_type", "code", "http_status", "retryable", "phase", "message") if key in event}
             elif kind == "model_response":
@@ -173,6 +139,7 @@ class BotTrace:
     def close(self, status: str):
         try:
             summary = {**dict(self.counts), "tools": dict(self.tools), "search_queries": self.queries,
+                       "stage_totals": self.stage_totals, "round_timings": list(self.round_timings.values()),
                        "image_downloads": self.media,
                        "image_status_counts": dict(Counter(row.get("status", "unknown") for row in self.media)),
                        "selected_image_urls": self.selected,

@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Lock
 import time
 import uuid
+from .telemetry import redact
 
 MAX_LOG_BYTES = 16 * 1024 * 1024
 TERMINAL = {"done", "error", "cancelled", "client_disconnected"}
@@ -36,7 +37,7 @@ class RequestLog:
             self.file = os.fdopen(fd, "wb")
         except OSError:
             self.failed = True
-        self.write({"type": "request", **metadata})
+        self.write({"type": "request", "log_schema_version": 2, **metadata})
 
     def _write(self, record: dict):
         raw = (json.dumps({"timestamp": utc_now(), "request_id": self.id, **record}, ensure_ascii=False) + "\n").encode()
@@ -45,6 +46,10 @@ class RequestLog:
         self.size += len(raw)
 
     def write(self, record: dict):
+        # Keep the final response and timings, not repeated token streams or images.
+        if record.get('type', '').endswith('_delta'):
+            return
+        record = redact(record)
         with self.lock:
             if record.get("type") in TERMINAL:
                 self.status = record["type"]
@@ -86,7 +91,7 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
         if path.is_symlink():
             continue
         summary = None
-        rounds, searches, pages = {}, {}, {}
+        rounds, searches, pages, tools, stages = {}, {}, {}, {}, {}
         with path.open(encoding="utf-8", errors="replace") as source:
             for line in source:
                 try:
@@ -101,6 +106,7 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                         break
                     summary = {key: event.get(key) for key in ("request_id", "timestamp", "message", "provider", "model", "reasoning", "search_provider", "search_mode", 'max_reader_images', 'reader_engine')}
                     summary.update(file=str(path), status="incomplete", log_truncated=False)
+                    summary.update(entry=event.get('entry', 'local_web'), log_schema_version=event.get('log_schema_version', 1))
                 if summary is None:
                     continue
                 if kind in TERMINAL:
@@ -109,6 +115,7 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                         summary["error"] = {key: event[key] for key in ("code", "http_status", "retryable", "message", "error_type") if key in event}
                 elif kind == "request_closed":
                     summary["status"] = event["status"]
+                    summary['elapsed_ms'] = ms
                 elif kind == "bot_summary":
                     summary["bot"] = {key: value for key, value in event.items()
                                       if key not in ("type", "timestamp", "request_id", "elapsed_ms", "thread")}
@@ -132,12 +139,16 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                         summary["rendering"]["stages_ms"] = event["stages_ms"]
                 elif kind == "model_start":
                     rounds[event["round"]] = {"round": event["round"], "start_ms": ms, "reasoning": event.get("reasoning")}
+                elif kind == 'model_first_output' and event['round'] in rounds:
+                    rounds[event['round']]['first_output_ms'] = event.get('duration_ms')
                 elif kind == "round_timing" and event["round"] in rounds:
                     rounds[event["round"]].update({key: event[key] for key in
-                        ("total_ms", "model_ms", "tool_ms", "media_download_ms", "image_processing_ms", "images_sent", "complete")
+                        ("total_ms", "model_ms", "tool_ms", "media_download_ms", "image_processing_ms", "images_sent", "complete", "timing_version")
                         if key in event})
                 elif kind == "model_response" and event["round"] in rounds:
                     response = event.get("response", {})
+                    if response.get('usage'):
+                        rounds[event['round']]['usage'] = response['usage']
                     rounds[event["round"]]["tool_calls"] = [block.get("name") for block in response.get("content", [])
                                                             if block.get("type") == "toolCall"]
                 elif kind == "model_stream_end" and event["round"] in rounds:
@@ -156,8 +167,20 @@ def log_summaries(home: Path, *, limit: int = 5, query: str = "") -> list[dict]:
                     row = searches.get((event.get("id", ""), event["query_index"]))
                     if row is not None:
                         row.update(end_ms=ms, duration_ms=event["duration_ms"], ok=event["ok"], cached=event.get("cached"))
+                elif kind in ('tool_start', 'tool_end'):
+                    row = tools.setdefault((event.get('round'), event.get('id')), {
+                        'round': event.get('round'), 'id': event.get('id'), 'name': event.get('name')})
+                    row['start_ms' if kind == 'tool_start' else 'end_ms'] = ms
+                    if kind == 'tool_end':
+                        row.update(duration_ms=event.get('duration_ms'), ok=event.get('ok'), code=event.get('code'))
+                elif kind in ('stage_start', 'stage_end'):
+                    row = stages.setdefault(event['stage_id'], {})
+                    row.update({k: v for k, v in event.items() if k not in
+                                ('type', 'timestamp', 'request_id', 'seq', 'thread', 'elapsed_ms')})
+                    row['start_ms' if kind == 'stage_start' else 'end_ms'] = ms
         if summary is not None:
-            summary.update(model_rounds=list(rounds.values()), searches=list(searches.values()), pages=list(pages.values()))
+            summary.update(model_rounds=list(rounds.values()), searches=list(searches.values()), pages=list(pages.values()),
+                           tool_calls=list(tools.values()), stages=list(stages.values()))
             summaries.append(summary)
         if len(summaries) == limit:
             break

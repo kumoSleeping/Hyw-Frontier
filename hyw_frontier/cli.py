@@ -22,6 +22,7 @@ def main() -> int:
     logs = commands.add_parser("logs", help="查询后端自动保存的请求日志和逐阶段耗时；不调用模型")
     logs.add_argument("--query", default="", help="按用户问题关键词筛选")
     logs.add_argument("--limit", type=int, default=5, help="最近多少次请求，默认5，最大100")
+    logs.add_argument('--compact', action='store_true', help='仅输出阶段、轮次和调用耗时，省略搜索与图片详情')
     commands.add_parser("status", help="只显示本项目已保存模型凭据的类型，不显示密钥")
     commands.add_parser("tools", help="查看项目自定义工具定义；不包含 Browser 或 Pi 工具")
     tool = commands.add_parser("call-tool", help="直接测试一个项目工具，不调用模型")
@@ -70,6 +71,13 @@ def main() -> int:
         elif args.command == "logs":
             from .request_log import log_summaries
             result = log_summaries(Bridge(args.home).home, limit=args.limit, query=args.query)
+            if args.compact:
+                for row in result:
+                    row.pop('searches', None)
+                    row.pop('pages', None)
+                    if 'bot' in row:
+                        for key in ('search_queries', 'image_downloads', 'selected_image_urls'):
+                            row['bot'].pop(key, None)
         elif args.command == "tools":
             result = tool_definitions()
         elif args.command == "call-tool":

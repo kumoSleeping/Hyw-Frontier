@@ -196,3 +196,5 @@ Hyw Frontier 是 Python 原生的检索问答核心：负责提示词、模型�
 **接入新的搜索服务**：参考 `hyw_frontier/parallel.py`、`jina.py` 或 `ddgs.py` 实现客户端，在 `hyw_frontier/tools.py` 的 `SEARCH_PROVIDERS` 和 `ToolRuntime` 中注册、选择和释放资源；同步调整 `hyw_frontier/tools.json` 的工具参数及服务适用范围。若需在本地网页正确显示名称、模式和凭据提示，同步更新 `hyw_frontier/static/settings.js`。公共 `answer()` 当前没有任意搜索客户端注入参数，`model` / `backend` 注入只替换模型层，不替换搜索服务。
 
 提示词统一目录为 `hyw_frontier/prompts/`，包含主模型、图片说明及临近轮次上限提醒。文件用途、注入时机和仍保留在代码中的协议内容见 [提示词审计](docs/prompt-audit.md)。
+
+请求日志的阶段字段、图片脱敏、计时口径与本地/生产查询方式见 [日志说明](docs/logging.md)。

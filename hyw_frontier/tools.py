@@ -127,6 +127,7 @@ class ToolRuntime:
 
     def execute(self, call: dict, *, on_query: Callable | None = None, _has_companion: bool = False,
                 _has_reader: bool = False) -> dict:
+        started = time.monotonic()
         name, args = call.get("name", ""), call.get("arguments")
         attachments = []
         try:
@@ -196,7 +197,8 @@ class ToolRuntime:
                                                       "provider": "jina", "search_mode": None})) if on_query else None
                     result = self._batch([args], self.jina.read_url, "url", notify)
                 elif name == "jina_pageshot":
-                    result, attachments = self.pageshots.run(args)
+                    notify = (lambda event: on_query({**event, 'id': call.get('id', ''), 'name': name})) if on_query else None
+                    result, attachments = self.pageshots.run(args, on_event=notify)
                 else:
                     result = {"ok": False, "code": "unknown_tool", "error": "工具未实现"}
         except Exception:
@@ -205,6 +207,7 @@ class ToolRuntime:
             "role": "toolResult", "toolCallId": call.get("id", ""), "toolName": name,
             "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}, *attachments],
             "isError": not result["ok"], "timestamp": int(time.time() * 1000),
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
         }
 
     def execute_many(self, calls: list[dict], on_result: Callable | None = None,

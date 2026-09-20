@@ -124,6 +124,7 @@ class SearchAgent:
                 for block in result["content"]]}
         self.on_event({"type": "tool_end", "round": round_number,
                        "id": result["toolCallId"], "name": result["toolName"], "result": event_result,
+                       "duration_ms": result.get('duration_ms'), "code": data.get('code'),
                        "ok": not result["isError"], "partial": data.get("partial", False), "sources": sources[:25]})
         if result["toolName"] == "send_process_intro" and not result["isError"]:
             self.on_event({"type": "process_intro", "round": round_number,
@@ -170,6 +171,10 @@ class SearchAgent:
         # On success release() joins remaining cleanup after rendering the snapshot.
 
     def _model_event(self, event: dict, round_number: int):
+        if event.get('type', '').endswith('_delta') and not self._first_output:
+            self._first_output = True
+            self.on_event({'type': 'model_first_output', 'round': round_number,
+                           'duration_ms': round((time.monotonic() - self._model_started) * 1000, 2)})
         if self._favicons is not None and event.get('type') == 'text_delta':
             self._favicons.feed(event.get('delta', ''), event.get('index', 0))
         self.on_event({**event, 'round': round_number})
@@ -264,6 +269,7 @@ class SearchAgent:
             images_sent = image_count()
             def emit_timing(phase, complete=False):
                 self.on_event({"type": "round_timing", "round": round_number, "phase": phase,
+                               "timing_version": 2,
                                "complete": complete, "total_ms": round((time.monotonic() - started) * 1000, 2),
                                **{key: round(value, 2) for key, value in times.items()},
                                "images_sent": images_sent, "image_budget": self.max_tool_images,
@@ -277,6 +283,7 @@ class SearchAgent:
                 request = {"command": "stream" if self.streaming else "complete",
                            "provider": provider, "model": model, "context": self.context, **settings}
                 model_started = time.monotonic()
+                self._model_started, self._first_output = model_started, False
                 try:
                     response = self.bridge.call(request, on_event=lambda event: self._model_event(event, round_number)) \
                         if self.streaming else self.bridge.call(request)
@@ -325,8 +332,6 @@ class SearchAgent:
                             lambda event: self.on_event({**event, 'round': round_number}))
                         times['media_download_ms'] += media_times['download_ms']
                         times['image_processing_ms'] += media_times['processing_ms']
-                        times['tool_ms'] += media_times['download_ms']
-                        times['model_ms'] += media_times['processing_ms']
                         if group[0]['toolName'] == 'jina_read_url':
                             result = group[0]
                             self.on_event({'type': 'page_timing', 'round': round_number,
