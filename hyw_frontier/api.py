@@ -22,7 +22,7 @@ from .cleanup import clear_exception_frames
 from .costs import Costs, model_items, summarize
 from .jina import JinaClient
 from .media import MAX_IMAGES, MAX_READER_IMAGES
-from .rendering import CardRenderer
+from .rendering import CardRenderer, RenderError
 from .render_protocol import answer_text, parse_answer
 from .runtime import Bridge, DEFAULT_LANGUAGE, DEFAULT_MODEL, DEFAULT_PROVIDER, build_context, load_prompt, render_prompt
 from .source_titles import source_titles
@@ -85,7 +85,8 @@ async def answer(
 
     `kind='text'`: send `display_text` directly; `png=None`, `render_ms=0`.
     `kind='image'`: Markdown is rendered to `png` bytes; `display_text` is the
-    cleaned Markdown body for fallback. `text` always retains the raw model output.
+    cleaned Markdown body for inspection. `text` always retains the raw model output.
+    Rendering failures raise RenderError; image answers never fall back to text.
 
     `send(text)` is invoked ONLY by a valid `send_process_intro` tool call: normally
     once per question, with one optional pre-read supplement. Sync and async callbacks
@@ -236,12 +237,17 @@ async def answer(
                 observe({"type": "render_start", "engine": "Pillow/md2png-hyw"})
                 renderer = CardRenderer()
                 resources.callback(renderer.close)
-                card = renderer.render(text, metadata={"truncated": truncated,
-                                                      "source_titles": source_titles(agent.context["messages"])},
-                                       cancel=cancelled, max_tool_images=max_tool_images,
-                                       font_set=fonts or FontSet.bundled(),
-                                       **({'image_assets': agent.image_assets} if agent.image_assets else {}),
-                                       **({'favicon_assets': agent.favicon_assets} if agent.favicon_assets else {}))
+                try:
+                    card = renderer.render(text, metadata={"truncated": truncated,
+                                                          "source_titles": source_titles(agent.context["messages"])},
+                                           cancel=cancelled, max_tool_images=max_tool_images,
+                                           font_set=fonts or FontSet.bundled(),
+                                           **({'image_assets': agent.image_assets} if agent.image_assets else {}),
+                                           **({'favicon_assets': agent.favicon_assets} if agent.favicon_assets else {}))
+                except RenderError as error:
+                    observe({"type": "render_error", "code": error.code,
+                             "duration_ms": round((time.monotonic() - rendering) * 1000)})
+                    raise
                 observe({"type": "render_end", "duration_ms": round((time.monotonic() - rendering) * 1000),
                          "image": {"mime_type": "image/png", "bytes": len(card.png)},
                          "diagnostics": list(card.diagnostics)})

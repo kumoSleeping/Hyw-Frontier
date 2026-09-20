@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 import time
 
-from .rendering import MAX_CARD_HEIGHT, MAX_IMAGE_BYTES, RenderError
+from .rendering import MAX_CARD_HEIGHT, MAX_IMAGE_BYTES, RenderError, RENDER_LIMIT_CODES, engine_error_code
 
 
 class RenderRuntime:
@@ -51,14 +51,14 @@ def render(work: Path, runtime: RenderRuntime | None = None) -> dict:
     from md2png.fonts import FontSet
     from md2png.hyw import render_document
     from md2png.model import Limits, RenderError as EngineError
-    from .pillow_card import adapt_answer, parse_protocol
+    from .pillow_card import adapt_answer, parse_protocol, referenced_assets
 
     started = time.perf_counter()
     timings = {}
     data = json.loads((work / 'input.json').read_text(encoding='utf-8'))
     answer = data['answer']
     if not isinstance(answer, str) or len(answer.encode('utf-8')) > 256 * 1024:
-        raise RenderError('answer_too_large')
+        raise RenderError('render_text_limit')
     stage = time.perf_counter()
     parsed = runtime.parser.parse(answer) if runtime else parse_protocol(answer)
     timings['protocol_ms'] = round((time.perf_counter() - stage) * 1000, 2)
@@ -71,29 +71,32 @@ def render(work: Path, runtime: RenderRuntime | None = None) -> dict:
         max_tool_images = data.get('max_tool_images', MAX_IMAGES)
         if (type(max_tool_images) is not int or max_tool_images < 0
                 or not isinstance(encoded_assets, dict) or len(encoded_assets) > max_tool_images):
-            raise RenderError('answer_too_large')
+            raise RenderError('render_asset_invalid')
+        encoded_icons = data.get('favicon_assets', {})
+        if not isinstance(encoded_icons, dict):
+            raise RenderError('render_asset_invalid')
+        document = adapt_answer(parsed, data.get('metadata') or {}, limits, reading=True,
+                                image_urls=set(encoded_assets))
+        encoded_assets, encoded_icons = referenced_assets(document, encoded_assets, encoded_icons)
         image_assets = {}
         for url, encoded in encoded_assets.items():
             if not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_JPEG_BYTES + 2) // 3):
-                raise RenderError('answer_too_large')
+                raise RenderError('render_asset_invalid')
             raw = base64.b64decode(encoded, validate=True)
             with Image.open(io.BytesIO(raw)) as image:
                 if image.format != 'JPEG' or max(image.size) > MAX_EDGE:
                     raise RenderError('render_failed')
                 image.verify()
             image_assets[url] = raw
-        document = adapt_answer(parsed, data.get('metadata') or {}, limits, reading=True,
-                                image_urls=set(image_assets))
         from .favicon_assets import MAX_ICONS, MAX_ICON_BYTES, validate_icon
         from md2png.hyw.document import source_origin
-        encoded_icons = data.get('favicon_assets', {})
-        if not isinstance(encoded_icons, dict) or len(encoded_icons) > MAX_ICONS:
-            raise RenderError('answer_too_large')
+        if len(encoded_icons) > MAX_ICONS:
+            raise RenderError('render_asset_invalid')
         source_origins = {source_origin(ref.url) for ref in document.references}
         for origin, encoded in encoded_icons.items():
             if (not isinstance(origin, str) or not origin or source_origin(origin) != origin
                     or not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_ICON_BYTES + 2) // 3)):
-                raise RenderError('answer_too_large')
+                raise RenderError('render_asset_invalid')
             raw = base64.b64decode(encoded, validate=True)
             validate_icon(raw)
             if origin in source_origins:
@@ -106,12 +109,7 @@ def render(work: Path, runtime: RenderRuntime | None = None) -> dict:
         result = render_document(document, limits=limits, scale=1, reject_overflow=True,
                                  font_assets=assets, font_set=font_set if assets is None else None, assets=image_assets, timings=timings)
     except EngineError as error:
-        message = str(error).lower()
-        if 'deadline' in message or 'timeout' in message:
-            raise RenderError('render_timeout') from error
-        if any(word in message for word in ('budget', 'limit', 'too narrow', 'wider than')):
-            raise RenderError('answer_too_large') from error
-        raise RenderError('render_failed') from error
+        raise RenderError(engine_error_code(error)) from error
     output = work / 'card.png'
     stage = time.perf_counter()
     with closing(result.image):
@@ -121,7 +119,7 @@ def render(work: Path, runtime: RenderRuntime | None = None) -> dict:
             result.image.save(output, format='PNG', compress_level=6)
         output.chmod(0o600)
         if output.stat().st_size > MAX_IMAGE_BYTES:
-            raise RenderError('answer_too_large')
+            raise RenderError('render_file_limit')
     timings['encode_ms'] = round((time.perf_counter() - stage) * 1000, 2)
     timings['worker_ms'] = round((time.perf_counter() - started) * 1000, 2)
     return {'ok': True, 'recovered': parsed['recovered'], 'mode': parsed['mode'],
@@ -141,7 +139,7 @@ def safe_render(work: Path, runtime: RenderRuntime | None = None) -> dict:
 def emit(result: dict):
     raw = json.dumps(result, ensure_ascii=False).encode() + b'\n'
     if len(raw) > 2 * 1024 * 1024:
-        raw = b'{"ok":false,"code":"answer_too_large"}\n'
+        raw = b'{"ok":false,"code":"render_protocol_limit"}\n'
     sys.stdout.buffer.write(raw)
     sys.stdout.buffer.flush()
 
@@ -191,7 +189,7 @@ def serve_worker():
             emit(result)
             # A fully unwound input/size rejection leaves no request state in assets.
             # Runtime/parser failures still retire the worker and its entire group.
-            if not result['ok'] and result.get('code') != 'answer_too_large':
+            if not result['ok'] and result.get('code') not in RENDER_LIMIT_CODES:
                 return 1
     except Exception:
         emit({'ok': False, 'code': 'render_failed'})

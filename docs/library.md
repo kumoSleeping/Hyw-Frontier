@@ -173,7 +173,9 @@ print("本次实际合计（USD）：", result.costs.total_usd)
 
 Reader 正文中的图片链接不按张数截断，JSON 原始响应受 2 MiB 上限约束，超限整次报错。下载候选按“原图/下载链接 → Markdown 图片 → 裸图片 URL 或分享参数”顺序提取、按 URL 去重，不按清晰度排序。网页图片逐页准备，每页选入上限内的候选分批处理；多类搜索结果一起准备时，以图搜图候选优先3个名额，再与其他搜索图片共享剩余总预算。解码时拒绝短边小于64像素、总像素超过2500万或非 JPEG/PNG/WEBP/GIF 的图片；失败仍占总尝试预算且不自动重试，但不阻止后续已选候选继续处理。成功图片全部附给模型，`width`、`height` 是压缩后的尺寸，由模型按相关性和清晰度决定最终展示哪些。超过单页/总预算或下载/解码失败的图片，其正文链接仍保留，但没有图片附件，也不会自动排队补抓；最终渲染只使用已下载通过处理的图片。
 
-模型通过 `media_images` 了解每张图的原链接、来源与附件顺序；每张附件紧邻的 `media_attachment` 文本标记再次绑定该图的 ID 与 URL，降低多图错配风险。图片下方说明直接来自该 URL 对应的 Markdown alt 文本，模型必须逐张核对，不能集中错配说明。最终在文章内部的相关正文附近，用独立段落的 `![图片说明](原图URL)` 选择已审阅图片；PNG渲染复用压缩字节，不再联网。`result.messages` 保留压缩图片附件供后续多轮复用，历史超过本次 `max_tool_images` 预算时需提高预算或新建对话；这与用户上传、聊天记录及组件图片分开计算。没有图片线索或下载失败不影响文字回答。
+模型通过 `media_images` 了解每张图的原链接、来源与附件顺序；每张附件紧邻的 `media_attachment` 文本标记再次绑定该图的 ID 与 URL，降低多图错配风险。图片下方说明直接来自该 URL 对应的 Markdown alt 文本，模型必须逐张核对，不能集中错配说明。最终在文章内部的相关正文附近，用独立段落的 `![图片说明](原图URL)` 选择已审阅图片；PNG渲染复用压缩字节，不再联网。渲染前按最终答案的 Markdown 结构，仅选取实际作为图片展示的资源和实际来源站点图标；候选图片池不整体传入渲染进程，未使用图片不占渲染资源额度。日志中的 `render_asset_selection` 区分候选数与最终使用数。`result.messages` 保留压缩图片附件供后续多轮复用，历史超过本次 `max_tool_images` 预算时需提高预算或新建对话；这与用户上传、聊天记录及组件图片分开计算。没有图片线索或下载失败不影响文字回答。
+
+渲染失败仍抛出 `RenderError`，不会改发正文文字、截断回答或自动重试模型。`render_error` 事件和异常 diagnostics 提供具体错误码：`render_asset_limit`（图片/图标数量）、`render_asset_pixels`（解码总像素）、`render_canvas_limit`（画布高度/像素）、`render_width_limit`（无法排入宽度）、`render_text_limit`（正文大小）、`render_structure_limit`（节点/层级）、`render_formula_limit`（公式）、`render_file_limit`（PNG 大小）、`render_protocol_limit`（进程通信大小），以及 `render_timeout` / `render_failed`。现有安全限制保持不变，正常模型图片审阅仍使用完整候选池。
 
 ## 字体和 Windows
 

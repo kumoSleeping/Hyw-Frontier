@@ -32,20 +32,63 @@ class RenderError(FrontierError):
         messages = {
             "browser_unavailable": "未找到可用的 Chrome/Chromium，请安装浏览器或设置 HYW_CHROME_PATH。",
             "render_timeout": "图片渲染超时。",
-            "answer_too_large": "回答超过单张图片的安全尺寸，未截断正文。",
+            "answer_too_large": "渲染数据超过安全上限。",
+            "render_text_limit": "正文超过渲染文本上限。",
+            "render_asset_limit": "最终引用的图片和图标数量超过渲染上限。",
+            "render_asset_pixels": "最终配图的解码总像素超过渲染上限。",
+            "render_asset_invalid": "最终配图或图标数据不符合渲染要求。",
+            "render_canvas_limit": "最终图片的高度或总像素超过渲染上限。",
+            "render_width_limit": "正文包含无法排入画布宽度的内容。",
+            "render_structure_limit": "正文的节点数量或嵌套层级超过渲染上限。",
+            "render_formula_limit": "公式复杂度超过渲染上限。",
+            "render_file_limit": "生成的 PNG 超过12 MiB上限。",
+            "render_protocol_limit": "渲染进程返回的数据超过传输上限。",
             "cancelled": "图片生成已取消。",
             "render_failed": "图片生成失败。",
         }
         self.code = code if code in messages else "render_failed"
-        super().__init__(messages[self.code])
+        super().__init__(messages[self.code], diagnostics={"code": self.code})
+
+
+RENDER_LIMIT_CODES = frozenset({
+    'answer_too_large', 'render_text_limit', 'render_asset_limit', 'render_asset_pixels',
+    'render_canvas_limit', 'render_width_limit', 'render_structure_limit',
+    'render_formula_limit', 'render_file_limit', 'render_protocol_limit',
+})
+
+
+def engine_error_code(error: Exception) -> str:
+    """Stable, non-sensitive reasons survive the isolated worker boundary."""
+    message = str(error).lower()
+    if 'deadline' in message or 'timeout' in message:
+        return 'render_timeout'
+    if 'combined decoded asset pixel' in message:
+        return 'render_asset_pixels'
+    if 'asset count' in message:
+        return 'render_asset_limit'
+    if 'canvas pixel/height' in message:
+        return 'render_canvas_limit'
+    if any(word in message for word in ('too narrow', 'wider than', 'canvas width', 'content width')):
+        return 'render_width_limit'
+    if 'formula' in message:
+        return 'render_formula_limit'
+    if 'markdown exceeds' in message or 'bounded string' in message:
+        return 'render_text_limit'
+    if any(word in message for word in ('node budget', 'inline budget', 'nesting budget', 'structural budget')):
+        return 'render_structure_limit'
+    if 'asset' in message or 'embedded image' in message:
+        return 'render_asset_invalid'
+    return 'render_failed'
 
 
 def png_size(data: bytes) -> tuple[int, int]:
-    if (not 24 <= len(data) <= MAX_IMAGE_BYTES or data[:8] != PNG_SIGNATURE or data[12:16] != b"IHDR"):
+    if len(data) > MAX_IMAGE_BYTES:
+        raise RenderError("render_file_limit")
+    if (not 24 <= len(data) or data[:8] != PNG_SIGNATURE or data[12:16] != b"IHDR"):
         raise RenderError("render_failed")
     width, height = struct.unpack(">II", data[16:24])
     if not 1 <= width <= 2160 or not 1 <= height <= MAX_CARD_HEIGHT * 2:
-        raise RenderError("answer_too_large")
+        raise RenderError("render_canvas_limit")
     return width, height
 
 
@@ -237,22 +280,38 @@ class CardRenderer:
         from .media import MAX_JPEG_BYTES
         from .favicon_assets import MAX_ICONS, MAX_ICON_BYTES
         from md2png.hyw.document import source_origin
-        favicon_assets = favicon_assets or {}
+        from md2png.model import Limits, RenderError as EngineError
+        from .pillow_card import adapt_answer, parse_protocol, referenced_assets
+        if len(answer.encode()) > 256 * 1024:
+            raise RenderError('render_text_limit')
+        if cancel.is_set() or self.closed.is_set():
+            raise RenderError('cancelled')
+        started = time.monotonic()
+        available_images, available_icons = len(image_assets or {}), len(favicon_assets or {})
+        try:
+            document = adapt_answer(parse_protocol(answer), metadata,
+                                    Limits(max_chars=256 * 1024), reading=True,
+                                    image_urls=set(image_assets or {}))
+        except EngineError as error:
+            raise RenderError(engine_error_code(error)) from error
+        image_assets, favicon_assets = referenced_assets(document, image_assets or {}, favicon_assets or {})
+        selection = {'code': 'render_asset_selection', 'available_images': available_images,
+                     'selected_images': len(image_assets), 'available_icons': available_icons,
+                     'selected_icons': len(favicon_assets)}
         if (len(favicon_assets) > MAX_ICONS or any(not isinstance(origin, str)
                 or not origin or source_origin(origin) != origin or not isinstance(raw, bytes)
                 or len(raw) > MAX_ICON_BYTES for origin, raw in favicon_assets.items())):
-            raise RenderError('answer_too_large')
+            raise RenderError('render_asset_invalid')
         image_assets = image_assets or {}
         if (type(max_tool_images) is not int or max_tool_images < 0
                 or len(image_assets) > max_tool_images or any(not isinstance(url, str) or not isinstance(raw, bytes)
                 or len(raw) > MAX_JPEG_BYTES for url, raw in image_assets.items())):
-            raise RenderError('answer_too_large')
-        if len(answer.encode()) > 256 * 1024:
-            raise RenderError("answer_too_large")
-        started = time.monotonic()
+            raise RenderError('render_asset_invalid')
+        selection_ms = (time.monotonic() - started) * 1000
         deadline = started + self.timeout
+        queued = time.monotonic()
         self._acquire(cancel, deadline)
-        queue_ms = (time.monotonic() - started) * 1000
+        queue_ms = (time.monotonic() - queued) * 1000
         clean_rejection = False
         try:
             prepare_started = time.monotonic()
@@ -286,22 +345,22 @@ class CardRenderer:
                     self._requests += 1
                     recycle = self._requests >= self.MAX_WORKER_REQUESTS or result.get('rss_mb', 0) >= self.MAX_WORKER_RSS_MB
                 if not result.get('ok'):
-                    clean_rejection = (not recycle and result.get('code') == 'answer_too_large'
+                    clean_rejection = (not recycle and result.get('code') in RENDER_LIMIT_CODES
                                        and result.get('request_complete') is True)
                     raise RenderError(result.get('code', 'render_failed'))
                 path = work / 'card.png'
                 if path.stat().st_size > MAX_IMAGE_BYTES:
-                    raise RenderError('answer_too_large')
+                    raise RenderError('render_file_limit')
                 png = path.read_bytes()
                 png_size(png)
                 self._check(cancel, deadline)
                 if recycle:
                     self._discard()
                 timings = result.get('timings', {})
-                timings.update(queue_ms=round(queue_ms, 2), prepare_ms=round(prepare_ms, 2),
+                timings.update(selection_ms=round(selection_ms, 2), queue_ms=round(queue_ms, 2), prepare_ms=round(prepare_ms, 2),
                                total_ms=round((time.monotonic() - started) * 1000, 2))
                 return RenderedCard(png, bool(result.get('recovered')), result.get('mode', 'text'),
-                                    tuple(result.get('diagnostics', ())), timings,
+                                    (selection, *result.get('diagnostics', ())), timings,
                                     tuple(result.get('links', ())))
         except Exception as error:
             if not clean_rejection or cancel.is_set() or self.closed.is_set():

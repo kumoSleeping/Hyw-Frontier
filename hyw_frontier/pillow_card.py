@@ -123,3 +123,21 @@ def adapt_answer(parsed: dict, metadata: dict, limits: Limits, *, reading: bool 
     # Keep inline links unchanged and never fetch remote icons or invent missing references.
     return HywDocument(title, tuple(sections), tuple(references.values()), (), '', '#ef4444', warning,
                        title_inlines=title_inlines, reading=reading)
+
+
+def referenced_assets(document: HywDocument, images: dict, icons: dict) -> tuple[dict, dict]:
+    """Select by the adapted AST, preserving exact URLs and reviewed image bytes."""
+    from md2png.hyw.document import source_origin
+
+    def targets(block):
+        for span in block.inlines:
+            if span.kind == 'image':
+                yield span.target
+        for child in block.children:
+            yield from targets(child)
+
+    used = {url for section in document.sections for block in section for url in targets(block)}
+    used.update(document.gallery)
+    origins = {source_origin(ref.url) for ref in document.references}
+    return ({url: raw for url, raw in images.items() if url in used},
+            {origin: raw for origin, raw in icons.items() if origin in origins})

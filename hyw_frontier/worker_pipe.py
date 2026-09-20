@@ -44,7 +44,7 @@ class JsonPipeReader:
                     raise PipeReadError("render_failed")
                 output.extend(chunk)
                 if len(output) > self.LIMIT:
-                    raise PipeReadError("answer_too_large")
+                    raise PipeReadError("render_protocol_limit")
                 if b"\n" in output:
                     if not output.endswith(b"\n") or output.count(b"\n") != 1:
                         raise PipeReadError("render_failed")
