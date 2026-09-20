@@ -22,12 +22,15 @@ from .jina import JinaError, public_url
 from .media import discover
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-ENGINES = (("yandex", "Yandex"), ("google_lens", "Google Lens"), ("tineye", "TinEye"))
+# Lens repeatedly returns verification pages through anonymous Reader (2026-09-20).
+# Keep its parser for diagnostics, but do not spend a request on it in normal searches.
+ENGINES = (("yandex", "Yandex"), ("tineye", "TinEye"))
 REVERSE_IMAGE_CONFIG = {"enabled": True, "tool": "reverse_image_search",
                         "upload": "on_tool_call_only",
                         "cleanup_timezone": "Asia/Shanghai", "cleanup_time": "00:00",
                         "automatic_retries": False, "result_format": "reader_extract",
-                        "engines": [name for name, _ in ENGINES], "reader_concurrency": 3,
+                        "engines": [name for name, _ in ENGINES], "reader_concurrency": len(ENGINES),
+                        "disabled_engines": {"google_lens": "anonymous_reader_verification"},
                         "deduplication": "exact_image_url_or_source_url_preserving_provenance"}
 
 
@@ -315,17 +318,16 @@ class ReverseImageSearch:
                 original["_reverse_image_upload"] = upload.copy()
         targets = [
             "https://yandex.com/images/search?" + urlencode({"url": upload["url"], "rpt": "imageview"}),
-            "https://lens.google.com/upload?" + urlencode({"url": upload["url"]}),
             "https://tineye.com/api/v1/result_json/?" + urlencode({"page": args.get("page", 1), "url": upload["url"]}),
         ]
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=len(ENGINES)) as pool:
             sources = list(pool.map(self._read_engine, [(key, name, target) for (key, name), target in zip(ENGINES, targets)]))
         matches, deduplication = aggregate_matches(sources)
         for source in sources:
             source["result_count"] = len(source.pop("matches"))
         successes = sum(source["ok"] for source in sources)
         return {"ok": successes > 0, "partial": 0 < successes < len(sources),
-                "title": "Yandex / Google Lens / TinEye 混合以图搜图",
+                "title": " / ".join(name for _, name in ENGINES) + " 混合以图搜图",
                 "content": "\n".join(f'{s["engine_name"]}: {s["status"]} ({s["result_count"]})' for s in sources),
                 "sources": sources, "matches": matches, "deduplication": deduplication,
                 "evidence_type": "reader_extract", "untrusted_content": True,

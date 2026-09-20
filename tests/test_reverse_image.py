@@ -80,7 +80,7 @@ class ReverseImageTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=3) as pool:
             results = list(pool.map(self.search.search, [self.args] * 3))
         self.assertEqual(len(self.uploads.calls), 1)
-        self.assertEqual(len(self.reads), 3)
+        self.assertEqual(len(self.reads), 2)
         request, timeout = self.uploads.calls[0]
         self.assertEqual(request.data, self.raw)
         self.assertEqual(request.get_header("Authorization"), "Bearer " + BRIDGE_API_KEY)
@@ -91,7 +91,7 @@ class ReverseImageTests(unittest.TestCase):
         self.assertFalse(any(k.lower() == "authorization" for k in headers))
         self.assertEqual(parse_qs(urlsplit(body["url"]).query),
                          {"page": ["1"], "url": [self.uploads.result["url"]]})
-        self.assertEqual(results[0]["sources"][2]["content"], CONTENT)
+        self.assertEqual(results[0]["sources"][1]["content"], CONTENT)
         self.assertEqual(results[0]["matches"][0]["url"], "https://example.org/page")
         history = UserImageCrops(deepcopy(self.messages))
         self.addCleanup(history.close)
@@ -162,6 +162,7 @@ class ReverseImageTests(unittest.TestCase):
         self.assertEqual([e["type"] for e in events], ["query_start", "query_end"])
         self.assertTrue(all(e["id"] == "reverse" and e["name"] == "reverse_image_search" for e in events))
         self.assertEqual(events[-1]["result_count"], 1)
+        self.assertEqual(events[0]["provider"], "yandex+tineye")
 
     def test_tool_image_pipeline_compression_binding_and_double_timeout(self):
         runtime = ToolRuntime(self.jina, search_provider="jina")
@@ -188,7 +189,7 @@ class ReverseImageTests(unittest.TestCase):
             self.assertEqual(image.format, "JPEG")
             self.assertLessEqual(max(image.size), MAX_EDGE)
         self.assertEqual(source_titles([result])["https://example.org/match.png"], "example.org")
-        self.assertEqual(json.loads(result["content"][0]["text"])["results"][0]["sources"][2]["content"], CONTENT)
+        self.assertEqual(json.loads(result["content"][0]["text"])["results"][0]["sources"][1]["content"], CONTENT)
 
     def test_download_timeout_keeps_reader_text(self):
         runtime = ToolRuntime(self.jina, search_provider="jina")
@@ -199,19 +200,19 @@ class ReverseImageTests(unittest.TestCase):
         with patch("hyw_frontier.media.download", side_effect=lambda c, cancel, timeout: (c, None, "download_timeout", 5000)):
             pipeline.prepare([result], Event(), lambda event: None)
         data = json.loads(result["content"][0]["text"])
-        self.assertEqual(data["results"][0]["sources"][2]["content"], CONTENT)
+        self.assertEqual(data["results"][0]["sources"][1]["content"], CONTENT)
         self.assertEqual(data["media_images"][0]["status"], "download_timeout")
         self.assertEqual(len(result["content"]), 1)
 
-    def test_three_readers_parallel_partial_failure_and_provenance(self):
-        barrier = Barrier(3)
+    def test_two_readers_parallel_and_provenance(self):
+        barrier = Barrier(2)
         yandex = '* [![Image 8: Author](https://avatars.mds.yandex.net/thumb)200×143](https://example.org/match.png) [Author post](https://example.org/post) https://example.org/match.png'
         seen = []
 
         def transport(endpoint, body, headers):
             seen.append(body["url"])
             barrier.wait(timeout=3)  # Serial execution cannot pass this test.
-            content = CONTENT if "tineye.com" in body["url"] else yandex if "yandex.com" in body["url"] else "Our systems have detected unusual traffic"
+            content = CONTENT if "tineye.com" in body["url"] else yandex
             return {"data": {"content": content}}
 
         self.jina.transport = transport
@@ -220,11 +221,11 @@ class ReverseImageTests(unittest.TestCase):
         result = runtime.execute({"id": "hybrid", "name": "reverse_image_search", "arguments": self.args})
         data = json.loads(result["content"][0]["text"])
         self.assertTrue(data["ok"])
-        self.assertTrue(data["partial"])
-        self.assertEqual(len(seen), 3)
+        self.assertFalse(data["partial"])
+        self.assertEqual(len(seen), 2)
+        self.assertFalse(any("google" in url for url in seen))
         hybrid = data["results"][0]
-        self.assertEqual([s["status"] for s in hybrid["sources"]], ["matched", "blocked", "matched"])
-        self.assertIn("unusual traffic", hybrid["sources"][1]["content"])
+        self.assertEqual([s["status"] for s in hybrid["sources"]], ["matched", "matched"])
         self.assertEqual(len(hybrid["matches"]), 1)
         match = hybrid["matches"][0]
         self.assertEqual(match["engines"], ["yandex", "tineye"])
@@ -271,13 +272,13 @@ class ReverseImageTests(unittest.TestCase):
             result = self.search.search(self.args)
         self.assertTrue(result["ok"])
         self.assertTrue(result["partial"])
-        self.assertEqual(len(result["sources"]), 3)
+        self.assertEqual(len(result["sources"]), 2)
         self.assertEqual(result["sources"][0]["code"], "network_error")
         self.assertEqual(len(result["matches"]), 1)
         with patch.object(self.jina, "read_url", side_effect=JinaError("network_error", "timeout")):
             result = self.search.search(self.args)
         self.assertFalse(result["ok"])
-        self.assertEqual(len(result["sources"]), 3)
+        self.assertEqual(len(result["sources"]), 2)
 
     def test_private_bridge_settings_do_not_echo_key(self):
         with TemporaryDirectory() as directory:
@@ -317,7 +318,7 @@ class ReverseImageTests(unittest.TestCase):
         result = runtime.execute({"id": "search-crop", "name": "reverse_image_search", "arguments": {"source_id": crop_id}})
         self.assertFalse(result["isError"])
         self.assertEqual(self.uploads.calls[0][0].data, raw)
-        self.assertEqual(len(self.reads), 3)
+        self.assertEqual(len(self.reads), 2)
         self.assertTrue(all(parse_qs(urlsplit(r[1]["url"]).query)["url"] == [self.uploads.result["url"]] for r in self.reads))
         self.messages.append(cropped)
         self.messages.append({"role": "user", "content": [{"type": "text", "text": "继续核对"}]})

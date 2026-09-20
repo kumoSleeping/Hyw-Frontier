@@ -163,7 +163,7 @@ print("本次实际合计（USD）：", result.costs.total_usd)
 
 ## 搜索图片
 
-`reverse_image_search` 按需进行混合以图搜图：原图 `source_id`、成功裁剪返回的 `crop_id`（填入 `source_id`），或公开 HTTPS 图片 `url`；`source_id` 与 `url` 二选一，上传一次后并行通过三个匿名 Jina Reader 查询 Yandex、Google Lens `/upload`、TinEye。`sources` 始终保留三个引擎的名称、状态、完整 Reader 正文和 `match_ids`，一个失败不影响其他来源；`matches` 按相同图片 URL（无图片时按页面 URL）合并，保留全部 `engines`、来源关联及 `duplicate_count`。结果按引擎轮流排列，避免一个来源占满图片预算。不做视觉相似度去重，不把验证页当成空匹配。可选 `page` 仅控制 TinEye，其他两个来源复用任务内缓存。图片沿用统一压缩、下载预算及取消机制，硬超时 5 秒（普通搜图 2.5 秒）；不下载 blob 缩略图，失败仍保留文字。只有调用才上传，同图链接跨历史消息复用到失效；图床单张上限 5 MiB，按北京时间每天 00:00 过期，午夜前最后 60 秒不接受新上传。
+`reverse_image_search` 按需进行混合以图搜图：原图 `source_id`、成功裁剪返回的 `crop_id`（填入 `source_id`），或公开 HTTPS 图片 `url`；`source_id` 与 `url` 二选一，上传一次后并行通过两个匿名 Jina Reader 查询 Yandex、TinEye（Google Lens 因匿名 Reader 持续返回验证页，已从默认调用移除）。`sources` 始终保留两个引擎的名称、状态、完整 Reader 正文和 `match_ids`，一个失败不影响其他来源；`matches` 按相同图片 URL（无图片时按页面 URL）合并，保留全部 `engines`、来源关联及 `duplicate_count`。结果按引擎轮流排列，避免一个来源占满图片预算。不做视觉相似度去重，不把验证页当成空匹配。可选 `page` 仅控制 TinEye，Yandex 复用任务内缓存。图片沿用统一压缩、下载预算及取消机制，硬超时 5 秒（普通搜图 2.5 秒）；不下载 blob 缩略图，失败仍保留文字。只有调用才上传，同图链接跨历史消息复用到失效；图床单张上限 5 MiB，按北京时间每天 00:00 过期，午夜前最后 60 秒不接受新上传。
 
 图床地址及上传密钥通过本机设置保存到应用 home 下的 `image-bridge.json`（默认 `~/.hyw-frontier/image-bridge.json`，权限 0600）。仓库仅包含通用 Worker 模板，使用 Cloudflare secret `UPLOAD_TOKEN`，不含个人部署地址、KV ID 或真实密钥。未配置时明确报错，无默认个人服务。`/api/config` 仅公开配置状态；图床设置读写需要本机页面鉴权，读取也不返回密钥，空密钥只在地址不变时保留旧值。公网图片 URL 必须传给搜索引擎并返回给模型；请勿把包含个人图片链接的本地日志或测试报告纳入公开仓库。
 

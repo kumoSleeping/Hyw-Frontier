@@ -113,7 +113,7 @@
   {
     "name": "reverse_image_search",
     "label": "以图搜图",
-    "description": "按需上传指定图片，以同一个公网链接并行通过三个 Jina Reader 查询 Yandex、Google Lens（/upload）和 TinEye，聚合返回三个来源的完整正文、各自状态、来源链接及自动下载压缩后的图片。按相同图片 URL 去重并保留全部 engines/sources 关联；视觉候选或同图命中不直接证明出处。向用户写清三个来源各自结果。使用用户原图 source_id、成功裁剪返回的 crop_id（填入 source_id），或公开 HTTPS 图片 url；source_id 与 url 二选一；同图有效期内复用，每天北京时间零点清理，不自动重试。图床通过本机设置配置，不向模型提供上传密钥",
+    "description": "按需上传指定图片，以同一个公网链接并行通过两个 Jina Reader 查询 Yandex 和 TinEye，聚合返回两个来源的完整正文、各自状态、来源链接及自动下载压缩后的图片。按相同图片 URL 去重并保留全部 engines/sources 关联；视觉候选或同图命中不直接证明出处。按 sources 说明实际调用来源的线索；no_matches 是无匹配，blocked/error/unparsed 是未取得可用结果，不混淆两者，不报告未调用引擎的状态。使用用户原图 source_id、成功裁剪返回的 crop_id（填入 source_id），或公开 HTTPS 图片 url；source_id 与 url 二选一；同图有效期内复用，每天北京时间零点清理，不自动重试。图床通过本机设置配置，不向模型提供上传密钥",
     "parameters": {
       "type": "object",
       "properties": {
@@ -133,7 +133,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 100,
-          "description": "仅控制 TinEye 结果页码，默认 1；只有确认存在下一页时翻页，其他两个来源复用任务内原查询缓存"
+          "description": "仅控制 TinEye 结果页码，默认 1；只有确认存在下一页时翻页，Yandex 复用任务内原查询缓存"
         }
       },
       "oneOf": [

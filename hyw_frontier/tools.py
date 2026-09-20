@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from .ddgs import DDGSClient
 from .jina import JinaClient, JinaError
 from .parallel import ParallelClient, SEARCH_MODE
+from .reverse_image import ENGINES
 
 SEARCH_PROVIDER = "parallel"
 SEARCH_PROVIDERS = ("jina", "parallel", "ddgs")
@@ -150,7 +151,7 @@ class ToolRuntime:
                         result = {"ok": False, "code": "image_search_unavailable", "error": "当前任务未初始化以图搜图"}
                     else:
                         notify = (lambda event: on_query({**event, "id": call.get("id", ""), "name": name,
-                                                          "provider": "yandex+google_lens+tineye", "search_mode": None})) if on_query else None
+                                                          "provider": "+".join(key for key, _ in ENGINES), "search_mode": None})) if on_query else None
                         result = self._batch([args], self.reverse_image_search,
                                              "source_id" if "source_id" in args else "url", notify)
                 elif name == "send_process_intro":
